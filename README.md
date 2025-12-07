@@ -2,12 +2,12 @@
 
 ## 📚 Estructura del Taller
 
-Este taller está diseñado para aprender a construir microservicios empresariales usando .NET 9, Azure, Terraform e Istio.
+Este taller está diseñado para aprender a construir microservicios empresariales usando .NET 10, Azure, Terraform e Istio.
 
 ### 🎯 Objetivos
 
 - Comprender los fundamentos de arquitectura de microservicios
-- Implementar microservicios con .NET 9 siguiendo mejores prácticas
+- Implementar microservicios con .NET 10 siguiendo mejores prácticas
 - Integrar servicios con Azure (App Configuration, Key Vault, Service Bus, AKS)
 - Automatizar infraestructura con Terraform
 - Implementar observabilidad con Istio
@@ -54,7 +54,7 @@ microservices-net-2025/
 
 ### 🚀 Requisitos Previos
 
-- .NET 9 SDK
+- .NET 10 SDK
 - Docker Desktop
 - Azure CLI
 - Terraform
