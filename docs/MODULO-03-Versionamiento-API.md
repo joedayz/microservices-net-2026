@@ -79,6 +79,7 @@ Implementar versionamiento de API y mejorar Swagger:
 
 ### Paso 1: Agregar Paquetes NuGet
 
+**Linux/macOS (Bash/Zsh):**
 ```bash
 # Desde la carpeta ProductService
 dotnet add package Asp.Versioning.Mvc
@@ -86,60 +87,149 @@ dotnet add package Asp.Versioning.Mvc.ApiExplorer
 dotnet add package Swashbuckle.AspNetCore
 ```
 
-O editar `ProductService.csproj`:
+**Windows (CMD):**
+```cmd
+REM Desde la carpeta ProductService
+dotnet add package Asp.Versioning.Mvc
+dotnet add package Asp.Versioning.Mvc.ApiExplorer
+dotnet add package Swashbuckle.AspNetCore
+```
+
+**Windows (PowerShell):**
+```powershell
+# Desde la carpeta ProductService
+dotnet add package Asp.Versioning.Mvc
+dotnet add package Asp.Versioning.Mvc.ApiExplorer
+dotnet add package Swashbuckle.AspNetCore
+```
+
+El `.csproj` debería quedar así:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Asp.Versioning.Mvc" Version="8.1.0" />
-  <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.0" />
-  <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
+  <PackageReference Include="Asp.Versioning.Mvc" Version="8.1.1" />
+  <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.1" />
+  <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.2" />
 </ItemGroup>
 ```
 
-**⚠️ Nota importante:** No agregues `Microsoft.AspNetCore.OpenApi` ya que causa conflictos con Swashbuckle. Swashbuckle incluye sus propias dependencias de OpenAPI.
+**⚠️ Nota importante:** No agregues `Microsoft.AspNetCore.OpenApi` ya que causa conflictos con Swashbuckle en .NET 10. Swashbuckle incluye sus propias dependencias de OpenAPI.
 
 ### Paso 2: Crear Estructura de Carpetas
 
+**Linux/macOS (Bash/Zsh):**
 ```bash
 # Crear carpetas para versiones
 mkdir -p Controllers/V1
 mkdir -p Controllers/V2
 ```
 
-### Paso 3: Configurar API Versioning en Program.cs
-
-**Archivo: `Program.cs`** (agregar después de `AddControllers()`)
-
-```csharp
-// API Versioning
-builder.Services.AddApiVersioning(options =>
-{
-    options.DefaultApiVersion = new Asp.Versioning.ApiVersion(1, 0);
-    options.AssumeDefaultVersionWhenUnspecified = true;
-    options.ReportApiVersions = true;
-    options.ApiVersionReader = Asp.Versioning.ApiVersionReader.Combine(
-        new Asp.Versioning.UrlSegmentApiVersionReader(),
-        new Asp.Versioning.HeaderApiVersionReader("X-Version"),
-        new Asp.Versioning.QueryStringApiVersionReader("version")
-    );
-}).AddApiExplorer(options =>
-{
-    options.GroupNameFormat = "'v'VVV";
-    options.SubstituteApiVersionInUrl = true;
-});
+**Windows (CMD):**
+```cmd
+REM Crear carpetas para versiones
+mkdir Controllers\V1
+mkdir Controllers\V2
 ```
 
-### Paso 4: Configurar Swagger
+**Windows (PowerShell):**
+```powershell
+# Crear carpetas para versiones
+mkdir -Force Controllers/V1
+mkdir -Force Controllers/V2
+```
+
+### Paso 3: Configurar API Versioning en Program.cs
+
+**Archivo: `Program.cs`** (agregar los usings y configurar API Versioning después de `AddControllers()`)
+
+```csharp
+using Asp.Versioning;
+using Asp.Versioning.ApiExplorer;
+using Microsoft.OpenApi;
+using ProductService;
+using ProductService.Application.Services;
+using ProductService.Domain;
+using ProductService.Infrastructure;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+
+// API Versioning
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.DefaultApiVersion = new ApiVersion(1, 0);
+        options.AssumeDefaultVersionWhenUnspecified = true;
+        options.ReportApiVersions = true;
+        options.ApiVersionReader = ApiVersionReader.Combine(
+            new UrlSegmentApiVersionReader(),
+            new HeaderApiVersionReader("X-Version"),
+            new QueryStringApiVersionReader("version")
+        );
+    })
+    .AddApiExplorer(options =>
+    {
+        options.GroupNameFormat = "'v'VVV";
+        options.SubstituteApiVersionInUrl = true;
+    });
+```
+
+### Paso 4: Crear ConfigureSwaggerOptions
+
+Para que Swagger descubra automáticamente las versiones de API, necesitamos una clase que implemente `IConfigureOptions<SwaggerGenOptions>`.
+
+**Archivo: `ConfigureSwaggerOptions.cs`** (crear en la raíz del proyecto ProductService)
+
+```csharp
+using Asp.Versioning.ApiExplorer;
+using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
+using Swashbuckle.AspNetCore.SwaggerGen;
+
+namespace ProductService;
+
+public class ConfigureSwaggerOptions : IConfigureOptions<SwaggerGenOptions>
+{
+    private readonly IApiVersionDescriptionProvider _provider;
+
+    public ConfigureSwaggerOptions(IApiVersionDescriptionProvider provider)
+    {
+        _provider = provider;
+    }
+
+    public void Configure(SwaggerGenOptions options)
+    {
+        foreach (var description in _provider.ApiVersionDescriptions)
+        {
+            options.SwaggerDoc(
+                description.GroupName,
+                new OpenApiInfo
+                {
+                    Title = "ProductService API",
+                    Version = description.ApiVersion.ToString(),
+                    Description = $"API version {description.ApiVersion}"
+                }
+            );
+        }
+    }
+}
+```
+
+**¿Por qué una clase separada?** En .NET 10 con Swashbuckle 10.x, la API de `Microsoft.OpenApi` cambió y no se puede usar `OpenApiInfo` directamente en `Program.cs` con `using Microsoft.OpenApi.Models`. La solución es usar `IConfigureOptions<SwaggerGenOptions>` con `using Microsoft.OpenApi` directamente, que sí funciona correctamente.
+
+### Paso 5: Configurar Swagger en Program.cs
 
 **Archivo: `Program.cs`** (agregar después de API Versioning)
 
 ```csharp
-// OpenAPI/Swagger
+// Swagger / OpenAPI (versioned)
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
 ```
 
-**Archivo: `Program.cs`** (actualizar pipeline)
+**Archivo: `Program.cs`** (configurar pipeline - después de `var app = builder.Build()`)
 
 ```csharp
 if (app.Environment.IsDevelopment())
@@ -147,14 +237,22 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(options =>
     {
-        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Product Service API v1");
-        options.SwaggerEndpoint("/swagger/v2/swagger.json", "Product Service API v2");
+        var provider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+
+        foreach (var description in provider.ApiVersionDescriptions)
+        {
+            options.SwaggerEndpoint(
+                $"/swagger/{description.GroupName}/swagger.json",
+                description.GroupName.ToUpperInvariant()
+            );
+        }
+
         options.RoutePrefix = string.Empty; // Swagger UI en la raíz
     });
 }
 ```
 
-### Paso 5: Crear Controlador V1
+### Paso 6: Crear Controlador V1
 
 **Archivo: `Controllers/V1/ProductsV1Controller.cs`**
 
@@ -259,7 +357,7 @@ public class ProductsController : ControllerBase
 }
 ```
 
-### Paso 6: Crear DTO para Respuesta Paginada
+### Paso 7: Crear DTO para Respuesta Paginada
 
 **Archivo: `Application/DTOs/PagedResult.cs`**
 
@@ -276,7 +374,7 @@ public class PagedResult<T>
 }
 ```
 
-### Paso 7: Crear Controlador V2 con Paginación
+### Paso 8: Crear Controlador V2 con Paginación
 
 **Archivo: `Controllers/V2/ProductsV2Controller.cs`**
 
@@ -351,15 +449,131 @@ public class ProductsController : ControllerBase
 }
 ```
 
-### Paso 8: Eliminar Controlador Antiguo
+### Paso 9: Actualizar Program.cs completo
 
-```bash
-# Eliminar el controlador sin versión (si existe)
-rm Controllers/ProductsController.cs
+**Archivo: `Program.cs`** (versión completa)
+
+```csharp
+using Asp.Versioning;
+using Asp.Versioning.ApiExplorer;
+using Microsoft.OpenApi;
+using ProductService;
+using ProductService.Application.Services;
+using ProductService.Domain;
+using ProductService.Infrastructure;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+builder.Services.AddControllers();
+
+// API Versioning
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.DefaultApiVersion = new ApiVersion(1, 0);
+        options.AssumeDefaultVersionWhenUnspecified = true;
+        options.ReportApiVersions = true;
+        options.ApiVersionReader = ApiVersionReader.Combine(
+            new UrlSegmentApiVersionReader(),
+            new HeaderApiVersionReader("X-Version"),
+            new QueryStringApiVersionReader("version")
+        );
+    })
+    .AddApiExplorer(options =>
+    {
+        options.GroupNameFormat = "'v'VVV";
+        options.SubstituteApiVersionInUrl = true;
+    });
+
+// Swagger / OpenAPI (versioned)
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
+
+// DI
+builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();
+builder.Services.AddSingleton<IProductService, ProductService.Application.Services.ProductService>();
+
+var app = builder.Build();
+
+// HTTP pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        var provider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+
+        foreach (var description in provider.ApiVersionDescriptions)
+        {
+            options.SwaggerEndpoint(
+                $"/swagger/{description.GroupName}/swagger.json",
+                description.GroupName.ToUpperInvariant()
+            );
+        }
+
+        options.RoutePrefix = string.Empty; // Swagger en /
+    });
+}
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+// Seed inicial
+using (var scope = app.Services.CreateScope())
+{
+    var repository = scope.ServiceProvider.GetRequiredService<IProductRepository>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    logger.LogInformation("Seeding initial data...");
+    await SeedDataAsync(repository);
+    logger.LogInformation("Seed data completed successfully");
+}
+
+app.Run();
+
+static async Task SeedDataAsync(IProductRepository repository)
+{
+    var products = new[]
+    {
+        new Product("Laptop", "High-performance laptop", 1299.99m, 10),
+        new Product("Mouse", "Wireless mouse", 29.99m, 50),
+        new Product("Keyboard", "Mechanical keyboard", 89.99m, 30)
+    };
+
+    foreach (var product in products)
+    {
+        await repository.CreateAsync(product);
+        Console.WriteLine($"Seeded product: {product.Name} (ID: {product.Id})");
+    }
+}
 ```
 
-### Paso 9: Compilar y Ejecutar
+### Paso 10: Eliminar Controlador Antiguo
 
+**Linux/macOS (Bash/Zsh):**
+```bash
+# Eliminar el controlador sin versión (si existe)
+rm -f Controllers/ProductsController.cs
+```
+
+**Windows (CMD):**
+```cmd
+REM Eliminar el controlador sin versión (si existe)
+del Controllers\ProductsController.cs
+```
+
+**Windows (PowerShell):**
+```powershell
+# Eliminar el controlador sin versión (si existe)
+Remove-Item -Force Controllers/ProductsController.cs -ErrorAction SilentlyContinue
+```
+
+### Paso 11: Compilar y Ejecutar
+
+**Linux/macOS (Bash/Zsh):**
 ```bash
 # Compilar
 dotnet build
@@ -368,11 +582,31 @@ dotnet build
 dotnet run
 ```
 
-### Paso 10: Probar Versionamiento
+**Windows (CMD):**
+```cmd
+REM Compilar
+dotnet build
+
+REM Ejecutar
+dotnet run
+```
+
+**Windows (PowerShell):**
+```powershell
+# Compilar
+dotnet build
+
+# Ejecutar
+dotnet run
+```
+
+### Paso 12: Probar Versionamiento
 
 **⚠️ Importante:** Verifica el puerto en `Properties/launchSettings.json`. Por defecto es `5001`.
 
-**Opción 1: Por URL (Recomendado)**
+#### Opción 1: Por URL (Recomendado)
+
+**Linux/macOS (Bash/Zsh):**
 ```bash
 # Versión 1 - Todos los productos
 curl http://localhost:5001/api/v1/Products
@@ -383,68 +617,129 @@ curl http://localhost:5001/api/v1/Products | jq
 # Versión 2 (con paginación)
 curl "http://localhost:5001/api/v2/Products?page=1&pageSize=5" | jq
 
-# Obtener producto específico
+# Obtener producto específico (reemplazar {id} con un GUID real)
 curl http://localhost:5001/api/v1/Products/{id} | jq
 ```
 
-**Opción 2: Por Header**
+**Windows (CMD):**
+```cmd
+REM Versión 1 - Todos los productos
+curl http://localhost:5001/api/v1/Products
+
+REM Versión 2 (con paginación)
+curl "http://localhost:5001/api/v2/Products?page=1&pageSize=5"
+
+REM Obtener producto específico (reemplazar {id} con un GUID real)
+curl http://localhost:5001/api/v1/Products/{id}
+```
+
+**Windows (PowerShell):**
+```powershell
+# Versión 1 - Todos los productos
+Invoke-RestMethod http://localhost:5001/api/v1/Products | ConvertTo-Json
+
+# Versión 2 (con paginación)
+Invoke-RestMethod "http://localhost:5001/api/v2/Products?page=1&pageSize=5" | ConvertTo-Json
+
+# Obtener producto específico (reemplazar {id} con un GUID real)
+Invoke-RestMethod http://localhost:5001/api/v1/Products/{id} | ConvertTo-Json
+```
+
+#### Opción 2: Por Header
+
+**Linux/macOS (Bash/Zsh):**
 ```bash
-# Nota: Requiere que la ruta base sea /api/[controller] sin versión
+# Nota: Solo funciona si existe un controlador con ruta /api/[controller] sin {version}
 curl -H "X-Version: 2.0" http://localhost:5001/api/Products
 ```
 
-**Opción 3: Por Query String**
+**Windows (PowerShell):**
+```powershell
+Invoke-RestMethod -Headers @{"X-Version"="2.0"} http://localhost:5001/api/Products | ConvertTo-Json
+```
+
+#### Opción 3: Por Query String
+
+**Linux/macOS (Bash/Zsh):**
 ```bash
 curl "http://localhost:5001/api/Products?version=2.0"
+```
+
+**Windows (PowerShell):**
+```powershell
+Invoke-RestMethod "http://localhost:5001/api/Products?version=2.0" | ConvertTo-Json
 ```
 
 **Nota sobre las rutas:**
 - ✅ `/api/v1/Products` - Versión explícita v1 (recomendado para producción)
 - ✅ `/api/v2/Products` - Versión explícita v2 con paginación
-- ✅ `/api/products` - Ruta sin versión sigue funcionando (del Módulo 1)
 - El `[controller]` en la ruta se reemplaza con "Products" (sin "Controller")
 - **Recomendación:** Usa rutas versionadas (`/api/v1/Products`) para mayor claridad y control
-- **Nota:** El controlador sin versión (`/api/products`) se mantiene para compatibilidad con el Módulo 1
+- Las opciones por Header y Query String solo funcionan si existe un controlador con ruta `/api/[controller]` sin `{version}` en la URL
 
-### Paso 11: Acceder a Swagger UI
+### Paso 13: Acceder a Swagger UI
 
-1. Abrir navegador: `http://localhost:5001/swagger` o `http://localhost:5001` (según configuración)
+1. Abrir navegador: `http://localhost:5001`
    - **Nota:** Verifica el puerto en `Properties/launchSettings.json`
-2. Verás un selector en la parte superior para elegir entre:
-   - Product Service API v1
-   - Product Service API v2
+   - Swagger está configurado con `RoutePrefix = string.Empty`, por lo que se abre directamente en la raíz
+2. Verás un **selector desplegable** en la parte superior derecha para elegir entre:
+   - **V1** - API v1.0 (CRUD completo)
+   - **V2** - API v2.0 (con paginación)
 3. Probar endpoints desde Swagger UI
 4. Swagger mostrará las rutas correctas: `/api/v1/Products` y `/api/v2/Products`
 
+**Ejemplo visual del selector:**
+```
+Select a definition: [ V1  ▼ ]
+                      [ V1    ]
+                      [ V2    ]
+```
+
 ### ✅ Checklist de Verificación
 
-- [ ] Paquetes de versionamiento instalados
-- [ ] Swashbuckle instalado
-- [ ] Carpetas V1 y V2 creadas
-- [ ] API Versioning configurado en Program.cs
-- [ ] Swagger configurado
-- [ ] ProductsV1Controller creado
+- [ ] Paquetes de versionamiento instalados (`Asp.Versioning.Mvc`, `Asp.Versioning.Mvc.ApiExplorer`)
+- [ ] Swashbuckle instalado (`Swashbuckle.AspNetCore`)
+- [ ] **No** se incluye `Microsoft.AspNetCore.OpenApi` ni `Microsoft.OpenApi` explícitamente
+- [ ] Carpetas `Controllers/V1` y `Controllers/V2` creadas
+- [ ] API Versioning configurado en `Program.cs`
+- [ ] `ConfigureSwaggerOptions.cs` creado con descubrimiento dinámico de versiones
+- [ ] `ConfigureSwaggerOptions` registrado con `builder.Services.ConfigureOptions<>()`
+- [ ] `UseSwaggerUI` usa `IApiVersionDescriptionProvider` para endpoints dinámicos
+- [ ] ProductsV1Controller creado con CRUD completo
 - [ ] ProductsV2Controller creado con paginación
 - [ ] PagedResult DTO creado
-- [ ] Proyecto compila sin errores
-- [ ] Swagger UI muestra ambas versiones
+- [ ] Controlador antiguo sin versión eliminado
+- [ ] Proyecto compila sin errores (`dotnet build`)
+- [ ] Swagger UI abre en `http://localhost:5001`
+- [ ] Swagger UI muestra ambas versiones (V1 y V2) en el selector
 - [ ] Endpoint v1 funciona sin paginación
 - [ ] Endpoint v2 funciona con paginación
-- [ ] Versionamiento por URL funciona
-- [ ] Versionamiento por header funciona
-- [ ] Versionamiento por query string funciona
+- [ ] Versionamiento por URL funciona (`/api/v1/Products`, `/api/v2/Products`)
 
 ### 📊 Estructura Final
 
 ```
-Controllers/
-├── V1/
-│   └── ProductsV1Controller.cs    # API v1.0 (CRUD completo)
-└── V2/
-    └── ProductsV2Controller.cs    # API v2.0 (con paginación)
-
-Application/DTOs/
-└── PagedResult.cs                  # DTO para respuestas paginadas
+ProductService/
+├── ConfigureSwaggerOptions.cs      # Configuración dinámica de Swagger por versión
+├── Program.cs                      # Configuración principal (DI, versioning, pipeline)
+├── Controllers/
+│   ├── V1/
+│   │   └── ProductsV1Controller.cs # API v1.0 (CRUD completo)
+│   └── V2/
+│       └── ProductsV2Controller.cs # API v2.0 (con paginación)
+├── Application/
+│   ├── DTOs/
+│   │   ├── ProductDto.cs           # DTO de producto
+│   │   ├── CreateProductDto.cs     # DTO para crear producto
+│   │   └── PagedResult.cs          # DTO para respuestas paginadas
+│   └── Services/
+│       ├── IProductService.cs      # Interfaz del servicio
+│       └── ProductService.cs       # Implementación del servicio
+├── Domain/
+│   ├── Product.cs                  # Entidad de dominio
+│   └── IProductRepository.cs       # Puerto de repositorio
+└── Infrastructure/
+    └── InMemoryProductRepository.cs # Adaptador de repositorio
 ```
 
 ### 💡 Conceptos Aplicados
@@ -453,7 +748,7 @@ Application/DTOs/
 ✅ **Versionamiento por Header**: `X-Version: 2.0`
 ✅ **Versionamiento por Query**: `?version=2.0`
 ✅ **DTOs separados de Entities**: Nunca exponer entidades directamente
-✅ **Documentación con Swagger**: UI interactiva
+✅ **Swagger versionado con `IConfigureOptions`**: Descubrimiento automático de versiones
 ✅ **Paginación**: Mejora rendimiento con grandes datasets
 ✅ **Respuestas estructuradas**: Metadatos en respuestas
 
@@ -468,31 +763,51 @@ Application/DTOs/
 
 ### 🐛 Solución de Problemas
 
-**Error: "ApiVersion not found"**
-- Verificar que los paquetes estén instalados
-- Verificar que `AddApiVersioning()` esté configurado
+**Error: `CS0234: The type or namespace name 'Models' does not exist in the namespace 'Microsoft.OpenApi'`**
+- En .NET 10 con Swashbuckle 10.x, la API de `Microsoft.OpenApi` cambió significativamente
+- **No se puede usar** `Microsoft.OpenApi.Models.OpenApiInfo` directamente en `Program.cs`
+- **Solución:** Crear la clase `ConfigureSwaggerOptions` (ver Paso 4) que usa `IConfigureOptions<SwaggerGenOptions>` e importa `using Microsoft.OpenApi;` (sin `.Models`)
+- Esto permite acceder a `OpenApiInfo` correctamente desde una clase con inyección de dependencias
 
-**Error: "GetSwagger does not have an implementation"**
-- Este error ocurre cuando hay conflicto entre `Microsoft.AspNetCore.OpenApi` y `Swashbuckle.AspNetCore`
-- **Solución:** Remover `Microsoft.AspNetCore.OpenApi` del `.csproj` y usar solo Swashbuckle
+**Error: `NU1605: Detected package downgrade: Microsoft.OpenApi`**
+- Ocurre cuando se referencia explícitamente `Microsoft.OpenApi` con una versión inferior a la requerida por Swashbuckle
+- **Solución:** No agregar `Microsoft.OpenApi` manualmente al `.csproj`. Swashbuckle lo incluye como dependencia transitiva con la versión correcta
 - Ejecutar: `dotnet clean && dotnet restore`
 
-**Swagger no muestra versiones**
-- Verificar que `AddApiExplorer()` esté configurado
-- Verificar que `SubstituteApiVersionInUrl = true`
+**Error: Conflicto entre `Microsoft.AspNetCore.OpenApi` y `Swashbuckle.AspNetCore`**
+- Estos dos paquetes NO son compatibles entre sí
+- **Solución:** Remover `Microsoft.AspNetCore.OpenApi` del `.csproj` y `builder.Services.AddOpenApi()` del `Program.cs`
+- Usar solamente Swashbuckle para documentación OpenAPI
+
+**Error: "ApiVersion not found"**
+- Verificar que los paquetes `Asp.Versioning.Mvc` y `Asp.Versioning.Mvc.ApiExplorer` estén instalados
+- Verificar que `AddApiVersioning()` esté configurado en `Program.cs`
+
+**Swagger UI carga pero dice "Failed to load API definition"**
+- Verificar que `ConfigureSwaggerOptions` esté registrado: `builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();`
+- Verificar que el `GroupNameFormat` sea `"'v'VVV"` (genera "v1", "v2")
+- Verificar que `UseSwaggerUI` use `IApiVersionDescriptionProvider` para generar los endpoints dinámicamente
+- Abrir directamente `http://localhost:5001/swagger/v1/swagger.json` para diagnosticar
+
+**Swagger solo muestra una versión**
+- Verificar que existan controladores con `[ApiVersion("1.0")]` y `[ApiVersion("2.0")]`
+- Verificar que ambos controladores tengan la ruta `[Route("api/v{version:apiVersion}/[controller]")]`
+- Verificar que `AddApiExplorer()` tenga `SubstituteApiVersionInUrl = true`
 
 **Endpoints no funcionan**
 - Verificar rutas: deben incluir `v{version:apiVersion}`
 - Verificar atributos `[ApiVersion("1.0")]` en controladores
+- La ruta correcta es `/api/v1/Products` (no `/api/Products`)
 
-**Paginación no funciona**
-- Verificar que page y pageSize sean parámetros de query
-- Verificar lógica de cálculo de TotalPages
+**Paginación no funciona (v2)**
+- Verificar que page y pageSize sean parámetros de query con valores por defecto
+- URL de ejemplo: `/api/v2/Products?page=1&pageSize=5`
 
 **"No devuelve nada" o "Connection refused"**
 - Verificar el puerto correcto: por defecto es `5001` (no 5000)
 - Verificar en `Properties/launchSettings.json` el puerto configurado
-- Usar la ruta completa con versión: `/api/v1/Products` (no `/api/products`)
+- Usar la ruta completa con versión: `/api/v1/Products`
 - El nombre del controlador es "Products" con mayúscula P
 - Verificar que el servicio esté corriendo: `dotnet run`
+- Verificar que el repositorio esté registrado como `AddSingleton` (no `AddScoped`) para que los datos seed persistan
 

@@ -32,12 +32,8 @@ builder.Services
 
 // Swagger / OpenAPI (versioned)
 builder.Services.AddEndpointsApiExplorer();
-
-// Swagger / OpenAPI (versioned)
-builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
-
 
 // DI
 builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();
