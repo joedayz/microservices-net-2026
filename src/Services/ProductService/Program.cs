@@ -3,6 +3,7 @@ using Asp.Versioning.ApiExplorer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
 using ProductService;
+using ProductService.Application.Configuration;
 using ProductService.Application.Services;
 using ProductService.Domain;
 using ProductService.Infrastructure;
@@ -12,6 +13,17 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
+
+// Configuración centralizada (Options Pattern)
+builder.Services.Configure<ProductServiceSettings>(
+    builder.Configuration.GetSection(ProductServiceSettings.SectionName));
+
+builder.Services.Configure<CacheSettings>(
+    builder.Configuration.GetSection(CacheSettings.SectionName));
+
+builder.Services.Configure<FeatureFlagSettings>(
+    builder.Configuration.GetSection(FeatureFlagSettings.SectionName));
+
 
 // Register Entity Framework
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
