@@ -902,10 +902,10 @@ az group create --name rg-microservices --location eastus
 az appconfig create --name appconfig-microservices --resource-group rg-microservices --location eastus --sku Free
 
 # Crear Key Vault
-az keyvault create --name kv-microservices --resource-group rg-microservices --location eastus
+az keyvault create --name kv-microservices-$RANDOM --resource-group rg-microservices --location eastus
 
 # Guardar connection string de PostgreSQL como secreto en Key Vault
-az keyvault secret set --vault-name kv-microservices --name "ConnectionStrings--DefaultConnection" --value "Host=prod-server;Port=5432;Database=prod_db;Username=app;Password=SecureP@ss"
+az keyvault secret set --vault-name kv-microservices-[$RANDOM] --name "ConnectionStrings--DefaultConnection" --value "Host=prod-server;Port=5432;Database=prod_db;Username=app;Password=SecureP@ss"
 
 # Guardar configuración en App Configuration
 az appconfig kv set --name appconfig-microservices --key "ProductService:ServiceName" --value "ProductService" --yes

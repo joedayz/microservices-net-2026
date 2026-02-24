@@ -1,6 +1,8 @@
 using Asp.Versioning;
 using Asp.Versioning.ApiExplorer;
+using Azure.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.OpenApi;
 using ProductService;
 using ProductService.Application.Configuration;
@@ -78,7 +80,40 @@ builder.Services.AddScoped<IProductRepository, EfProductRepository>();
 //builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();
 builder.Services.AddScoped<IProductService, ProductService.Application.Services.ProductService>();
 
+// Agregar Azure App Configuration (ANTES de builder.Build())
+// Usar AppConfig:Enabled=false en Development para evitar bloqueos si Azure es lento
+var appConfigEnabled = builder.Configuration.GetValue<bool>("AppConfig:Enabled", true);
+if (appConfigEnabled && !string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+{
+    builder.Services.AddAzureAppConfiguration();
+    builder.Configuration.AddAzureAppConfiguration(options =>
+    {
+        var endpoint = builder.Configuration["AppConfig:Endpoint"]!;
+        var credential = new DefaultAzureCredential();
+
+        options.Connect(new Uri(endpoint), credential)
+            .Select("ProductService:*")         // Configuración del servicio
+            .Select("Cache:*")                  // Configuración de cache
+            .Select("FeatureFlags:*")           // Feature flags
+            .ConfigureKeyVault(kv =>
+            {
+                kv.SetCredential(credential);   // Para resolver referencias a Key Vault
+            })
+            .ConfigureRefresh(refresh =>
+            {
+                refresh.Register("ProductService:Sentinel", refreshAll: true)
+                    .SetRefreshInterval(TimeSpan.FromSeconds(30));
+            });
+    }, optional: true);  // Si Azure falla (403, timeout), la app arranca con config local
+}
+
 var app = builder.Build();
+
+// Middleware para refresh automático de App Configuration
+if (appConfigEnabled && !string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+{
+    app.UseAzureAppConfiguration();
+}
 
 // =========================
 // HTTP pipeline
