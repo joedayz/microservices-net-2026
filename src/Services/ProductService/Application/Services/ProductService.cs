@@ -1,23 +1,26 @@
 using ProductService.Application.DTOs;
 using ProductService.Domain;
+using ProductService.Domain.Events;
 using ProductService.Infrastructure.Cache;
 
 namespace ProductService.Application.Services;
 
-public class ProductService: IProductService
+public class ProductService : IProductService
 {
-
     private readonly IProductRepository _repository;
     private readonly IProductCache _cache;
+    private readonly IEventPublisher _eventPublisher;
     private readonly ILogger<ProductService> _logger;
 
     public ProductService(
         IProductRepository repository,
         IProductCache cache,
+        IEventPublisher eventPublisher,
         ILogger<ProductService> logger)
     {
         _repository = repository;
         _cache = cache;
+        _eventPublisher = eventPublisher;
         _logger = logger;
     }
 
@@ -78,6 +81,15 @@ public class ProductService: IProductService
         var product = new Product(dto.Name, dto.Description, dto.Price, dto.Stock);
         var createdProduct = await _repository.CreateAsync(product, cancellationToken);
 
+        await _eventPublisher.PublishAsync(new ProductCreatedEvent
+        {
+            ProductId = createdProduct.Id,
+            Name = createdProduct.Name,
+            Description = createdProduct.Description ?? string.Empty,
+            Price = createdProduct.Price,
+            Stock = createdProduct.Stock
+        }, cancellationToken);
+
         var result = MapToDto(createdProduct);
 
         // Guardar en cache e invalidar lista
@@ -91,13 +103,25 @@ public class ProductService: IProductService
         _logger.LogInformation("Updating product with ID: {ProductId}", id);
         var product = await _repository.GetByIdAsync(id, cancellationToken);
         if (product == null)
-        {
             return false;
-        }
+
+        product.Name = dto.Name;
+        product.Description = dto.Description ?? string.Empty;
+        product.Price = dto.Price;
+        product.Stock = dto.Stock;
+        product.UpdatedAt = DateTime.UtcNow;
+
         var updated = await _repository.UpdateAsync(product, cancellationToken);
         if (updated)
         {
-            // Invalidar cache
+            await _eventPublisher.PublishAsync(new ProductUpdatedEvent
+            {
+                ProductId = product.Id,
+                Name = product.Name,
+                Description = product.Description ?? string.Empty,
+                Price = product.Price,
+                Stock = product.Stock
+            }, cancellationToken);
             await _cache.RemoveAsync(id, cancellationToken);
         }
         return updated;
@@ -109,10 +133,9 @@ public class ProductService: IProductService
         var deleted = await _repository.DeleteAsync(id, cancellationToken);
         if (deleted)
         {
-            // Invalidar cache
+            await _eventPublisher.PublishAsync(new ProductDeletedEvent { ProductId = id }, cancellationToken);
             await _cache.RemoveAsync(id, cancellationToken);
         }
-
         return deleted;
     }
 

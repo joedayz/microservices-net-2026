@@ -2,14 +2,15 @@ using Asp.Versioning;
 using Asp.Versioning.ApiExplorer;
 using Azure.Identity;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.OpenApi;
 using ProductService;
 using ProductService.Application.Configuration;
 using ProductService.Application.Services;
 using ProductService.Domain;
+using ProductService.Domain.Events;
+using ProductService.Grpc;
 using ProductService.Infrastructure;
 using ProductService.Infrastructure.Cache;
+using ProductService.Infrastructure.Messaging;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -75,9 +76,38 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
 
+// RabbitMQ options (ConnectionString from ConnectionStrings:RabbitMq)
+builder.Services.AddOptions<RabbitMqOptions>()
+    .Configure<IConfiguration>((opts, config) =>
+    {
+        config.GetSection(RabbitMqOptions.SectionName).Bind(opts);
+        opts.ConnectionString = config.GetConnectionString("RabbitMq") ?? opts.ConnectionString;
+    });
+
+var messagingProvider = builder.Configuration.GetValue<string>("Messaging:Provider") ?? "log";
+if (messagingProvider.Equals("rabbitmq", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IEventPublisher, RabbitMqEventPublisher>();
+    builder.Services.AddHostedService<ProductEventConsumer>();
+}
+else
+{
+    builder.Services.AddSingleton<IEventPublisher, LogEventPublisher>();
+}
+
+// gRPC
+builder.Services.AddGrpc();
+builder.Services.AddGrpcReflection();
+
+// Kestrel: REST en 5001, gRPC en 5002
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenLocalhost(5001, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    options.ListenLocalhost(5002, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
+});
+
 // DI
 builder.Services.AddScoped<IProductRepository, EfProductRepository>();
-//builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();
 builder.Services.AddScoped<IProductService, ProductService.Application.Services.ProductService>();
 
 // Agregar Azure App Configuration (ANTES de builder.Build())
@@ -141,6 +171,8 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
+app.MapGrpcService<ProductGrpcService>();
+app.MapGrpcReflectionService();
 
 // =========================
 // Seed inicial

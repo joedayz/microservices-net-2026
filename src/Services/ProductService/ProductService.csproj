@@ -22,6 +22,13 @@
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.3" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.2" />
+    <PackageReference Include="RabbitMQ.Client" Version="6.9.2" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.67.0" />
+    <PackageReference Include="Grpc.AspNetCore.Server.Reflection" Version="2.67.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\product.proto" GrpcServices="Server" />
   </ItemGroup>
 
 </Project>
