@@ -32,28 +32,55 @@ builder.Services.AddSingleton<IOrderRepository, InMemoryOrderRepository>();
 // ============================
 // JWT Authentication
 // ============================
-var jwtSettings = builder.Configuration.GetSection("Jwt");
-var secretKey = jwtSettings["Key"] ?? "S3cur3K3y_F0r_D3v3l0pm3nt_Purp0s3s_Only_2025!";
+var authProvider = builder.Configuration.GetValue<string>("Auth:Provider") ?? "local";
 
-builder.Services.AddAuthentication(options =>
+if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
+    // ── Azure AD / Microsoft Entra ID ──
+    var azureAdConfig = builder.Configuration.GetSection("AzureAd");
+
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0";
+            options.Audience = azureAdConfig["Audience"];
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
+                RoleClaimType = "roles"
+            };
+        });
+}
+else
 {
-    options.TokenValidationParameters = new TokenValidationParameters
+    // ── JWT Local (desarrollo/laboratorio) ──
+    var jwtSettings = builder.Configuration.GetSection("Jwt");
+    var secretKey = jwtSettings["Key"] ?? "S3cur3K3y_F0r_D3v3l0pm3nt_Purp0s3s_Only_2025!";
+
+    builder.Services.AddAuthentication(options =>
     {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtSettings["Issuer"] ?? "microservices-net-2025",
-        ValidAudience = jwtSettings["Audience"] ?? "microservices-api",
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-        ClockSkew = TimeSpan.Zero
-    };
-});
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtSettings["Issuer"] ?? "microservices-net-2025",
+            ValidAudience = jwtSettings["Audience"] ?? "microservices-api",
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+            ClockSkew = TimeSpan.Zero
+        };
+    });
+}
 
 builder.Services.AddAuthorization(options =>
 {

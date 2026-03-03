@@ -908,17 +908,484 @@ En producción con Azure AD, cada servicio tendría su propio App Registration c
 
 ---
 
+## ☁️ Laboratorio 8B – Integración con Azure AD (Microsoft Entra ID)
+
+Ahora vamos a conectar nuestros microservicios con **Azure AD** real para que los tokens
+sean emitidos por Microsoft. Esto es lo que usarías en producción.
+
+### Arquitectura con Azure AD
+
+```
+┌──────────┐     ┌──────────────────────┐     ┌───────────────────────┐
+│  Cliente  │────▶│  Microsoft Entra ID  │────▶│  Token JWT firmado    │
+│  (Postman │     │  (Azure AD)          │     │  por Azure AD         │
+│   / SPA)  │     │                      │     │                       │
+└──────────┘     │  1. App Registration  │     │  iss: login.microsoft │
+                  │  2. Client Credentials│     │  aud: api://{client}  │
+                  │  3. Scopes / Roles    │     │  roles: ["Admin"]     │
+                  └──────────────────────┘     └───────────┬───────────┘
+                                                            │
+                              Bearer Token                  │
+                  ┌─────────────────────────────────────────┘
+                  ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    Microservicios                                 │
+│                                                                   │
+│  ┌──────────────────┐          ┌──────────────────┐              │
+│  │  ProductService   │          │  OrderService    │              │
+│  │                   │          │                  │              │
+│  │  Authority:       │          │  Authority:      │              │
+│  │  login.microsoft  │          │  login.microsoft │              │
+│  │  .com/{tenant}    │          │  .com/{tenant}   │              │
+│  │                   │          │                  │              │
+│  │  Valida firma con │          │  Valida firma con│              │
+│  │  claves públicas  │          │  claves públicas │              │
+│  │  de Azure AD      │          │  de Azure AD     │              │
+│  └──────────────────┘          └──────────────────┘              │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+> **Diferencia clave:** Con Azure AD no necesitamos gestionar claves secretas.
+> Azure AD firma con RS256 (clave asimétrica) y publica las claves públicas
+> en un endpoint JWKS. Nuestros servicios las descargan automáticamente.
+
+---
+
+### Paso B1 – Crear el App Registration en Azure Portal
+
+1. Ir a [portal.azure.com](https://portal.azure.com)
+2. Buscar **"Microsoft Entra ID"** (antes Azure Active Directory)
+3. En el menú lateral, ir a **App registrations** → **+ New registration**
+
+```
+Configurar:
+┌──────────────────────────────────────────────────────────────┐
+│  Name:                    microservices-api                   │
+│  Supported account types: Single tenant                      │
+│  Redirect URI:            (dejar vacío por ahora)            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+4. Hacer clic en **Register**
+5. Anotar los valores que aparecen:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Application (client) ID:   xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxx │  ← AUDIENCE
+│  Directory (tenant) ID:     yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyy │  ← TENANT
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Paso B2 – Exponer la API (definir scopes)
+
+1. En el App Registration, ir a **Expose an API**
+2. Hacer clic en **+ Add a scope**
+3. Si pide un **Application ID URI**, aceptar el valor por defecto (`api://{client-id}`) → **Save and continue**
+
+```
+Configurar el scope:
+┌──────────────────────────────────────────────────────────────┐
+│  Scope name:             access_as_user                      │
+│  Who can consent?:       Admins and users                    │
+│  Admin consent display:  Access Microservices API            │
+│  Admin consent desc:     Allow the app to access the API     │
+│  User consent display:   Access Microservices API            │
+│  User consent desc:      Allow access to Microservices API   │
+│  State:                  Enabled                             │
+└──────────────────────────────────────────────────────────────┘
+```
+
+4. Hacer clic en **Add scope**
+
+---
+
+### Paso B3 – Definir App Roles (Admin, Reader)
+
+1. En el App Registration, ir a **App roles** → **+ Create app role**
+
+**Rol Admin:**
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Display name:           Admin                               │
+│  Allowed member types:   Users/Groups                        │
+│  Value:                  Admin                               │
+│  Description:            Full access to manage resources     │
+│  Enable this role:       ✅                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Rol Reader:**
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Display name:           Reader                              │
+│  Allowed member types:   Users/Groups                        │
+│  Value:                  Reader                              │
+│  Description:            Read-only access to resources       │
+│  Enable this role:       ✅                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+2. Hacer clic en **Apply** para cada uno
+
+---
+
+### Paso B4 – Asignar roles a usuarios
+
+1. Ir a **Microsoft Entra ID** → **Enterprise applications**
+2. Buscar y seleccionar **microservices-api**
+3. Ir a **Users and groups** → **+ Add user/group**
+4. Seleccionar un usuario y asignarle el rol **Admin** o **Reader**
+
+> **💡 Tip:** Si no tienes usuarios de prueba, crea uno en Entra ID → Users → + New user.
+
+---
+
+### Paso B5 – Crear un Client App (para obtener tokens)
+
+Necesitamos una segunda App Registration que actúe como "cliente" (simula Postman/SPA):
+
+1. **App registrations** → **+ New registration**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Name:                    microservices-client                │
+│  Supported account types: Single tenant                      │
+│  Redirect URI:            Web → https://oauth.pstmn.io/v1/  │
+│                           callback (para Postman)            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+2. Ir a **Certificates & secrets** → **+ New client secret**
+   - Description: `dev-secret`
+   - Expires: 6 months
+   - **Copiar el Value** (solo se muestra una vez)
+
+3. Ir a **API permissions** → **+ Add a permission**
+   - Seleccionar **My APIs** → **microservices-api**
+   - Marcar el scope `access_as_user`
+   - Hacer clic en **Add permissions**
+   - Hacer clic en **Grant admin consent for {tenant}**
+
+Anotar los valores:
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Client App ID:     cccccccc-cccc-cccc-cccc-ccccccccccccc    │
+│  Client Secret:     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│  Tenant ID:         yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyyyyy  │
+│  API App ID URI:    api://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Paso B6 – Configurar ProductService para Azure AD
+
+#### `appsettings.json` – Agregar sección AzureAd
+
+```json
+{
+  "AzureAd": {
+    "Instance": "https://login.microsoftonline.com/",
+    "TenantId": "<TU-TENANT-ID>",
+    "ClientId": "<TU-API-CLIENT-ID>",
+    "Audience": "api://<TU-API-CLIENT-ID>"
+  }
+}
+```
+
+#### `Program.cs` – Configurar doble esquema (Local + Azure AD)
+
+Reemplazar la sección de JWT Authentication para soportar **ambos modos**:
+
+```csharp
+// ============================
+// JWT Authentication
+// ============================
+var authProvider = builder.Configuration.GetValue<string>("Auth:Provider") ?? "local";
+
+if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
+{
+    // ── Azure AD / Microsoft Entra ID ──
+    var azureAdConfig = builder.Configuration.GetSection("AzureAd");
+
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0";
+            options.Audience = azureAdConfig["Audience"];
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,     // Azure AD descarga las claves JWKS automáticamente
+                ValidIssuer = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
+                RoleClaimType = "roles"              // Azure AD usa "roles" (no ClaimTypes.Role)
+            };
+        });
+}
+else
+{
+    // ── JWT Local (desarrollo/laboratorio) ──
+    var jwtSettings = builder.Configuration.GetSection("Jwt");
+    var secretKey = jwtSettings["Key"] ?? "S3cur3K3y_F0r_D3v3l0pm3nt_Purp0s3s_Only_2025!";
+
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtSettings["Issuer"] ?? "microservices-net-2025",
+            ValidAudience = jwtSettings["Audience"] ?? "microservices-api",
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(secretKey)),
+            ClockSkew = TimeSpan.Zero
+        };
+    });
+}
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
+    options.AddPolicy("ReadOnly", policy => policy.RequireRole("Admin", "Reader"));
+});
+```
+
+> **Clave:** `RoleClaimType = "roles"` es crítico para Azure AD.
+> Los App Roles de Azure AD llegan en el claim `roles` (array), no en
+> `http://schemas.microsoft.com/ws/2008/06/identity/claims/role` como los locales.
+
+#### `appsettings.json` – Selector de proveedor
+
+```json
+{
+  "Auth": {
+    "Provider": "local"
+  }
+}
+```
+
+Cambiar a `"azuread"` cuando quieras usar Azure AD:
+
+```json
+{
+  "Auth": {
+    "Provider": "azuread"
+  }
+}
+```
+
+#### `appsettings.Development.json` – Forzar modo local
+
+```json
+{
+  "Auth": {
+    "Provider": "local"
+  }
+}
+```
+
+Así, en Development usas JWT local y en Production usas Azure AD sin cambiar código.
+
+---
+
+### Paso B7 – Obtener un token de Azure AD
+
+#### Opción A: Con `curl` (Client Credentials Flow)
+
+Para obtener un token de aplicación (sin usuario interactivo):
+
+```bash
+TENANT_ID="<TU-TENANT-ID>"
+CLIENT_ID="<TU-CLIENT-APP-ID>"
+CLIENT_SECRET="<TU-CLIENT-SECRET>"
+API_SCOPE="api://<TU-API-CLIENT-ID>/.default"
+
+curl -X POST "https://login.microsoftonline.com/$TENANT_ID/oauth2/v2.0/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=$CLIENT_ID" \
+  -d "client_secret=$CLIENT_SECRET" \
+  -d "scope=$API_SCOPE" | jq
+```
+
+Respuesta:
+```json
+{
+  "token_type": "Bearer",
+  "expires_in": 3599,
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6..."
+}
+```
+
+#### Opción B: Con `az cli` (usuario interactivo)
+
+```bash
+# Login interactivo
+az login
+
+# Obtener token para la API
+az account get-access-token \
+  --resource "api://<TU-API-CLIENT-ID>" \
+  --query accessToken -o tsv
+```
+
+#### Opción C: Con Postman (Authorization Code Flow)
+
+1. En Postman, ir a la pestaña **Authorization**
+2. Type: **OAuth 2.0**
+3. Configurar:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Grant Type:    Authorization Code                           │
+│  Auth URL:      https://login.microsoftonline.com/           │
+│                 {tenant-id}/oauth2/v2.0/authorize            │
+│  Token URL:     https://login.microsoftonline.com/           │
+│                 {tenant-id}/oauth2/v2.0/token                │
+│  Client ID:     {client-app-id}                              │
+│  Client Secret: {client-secret}                              │
+│  Scope:         api://{api-client-id}/access_as_user         │
+│  Callback URL:  https://oauth.pstmn.io/v1/callback          │
+└──────────────────────────────────────────────────────────────┘
+```
+
+4. Hacer clic en **Get New Access Token**
+5. Login con tu usuario de Azure AD
+6. Copiar el token → usarlo en las peticiones
+
+---
+
+### Paso B8 – Probar endpoints con token de Azure AD
+
+```bash
+# Obtener token
+TOKEN=$(curl -s -X POST \
+  "https://login.microsoftonline.com/$TENANT_ID/oauth2/v2.0/token" \
+  -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET&scope=$API_SCOPE" \
+  | jq -r '.access_token')
+
+# ✅ GET productos (público)
+curl http://localhost:5001/api/v1/products | jq
+
+# ✅ POST producto con token Azure AD
+curl -X POST http://localhost:5001/api/v1/products \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"Cloud Product","description":"Desde Azure AD","price":99.99,"stock":10}' | jq
+
+# ✅ Mismo token en OrderService
+curl -X POST http://localhost:5003/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"customerName":"Azure User","items":[{"productId":"...","quantity":1}]}' | jq
+```
+
+---
+
+### Paso B9 – Decodificar el token de Azure AD
+
+Copiar el token y pegarlo en [jwt.ms](https://jwt.ms) (herramienta oficial de Microsoft):
+
+```json
+{
+  "aud": "api://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "iss": "https://login.microsoftonline.com/{tenant-id}/v2.0",
+  "iat": 1709337600,
+  "exp": 1709341200,
+  "azp": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+  "roles": [
+    "Admin"
+  ],
+  "sub": "...",
+  "oid": "...",
+  "preferred_username": "admin@tudominio.onmicrosoft.com",
+  "name": "Admin User",
+  "tid": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+  "ver": "2.0"
+}
+```
+
+**Diferencias con el token local:**
+
+| Campo | JWT Local | Azure AD |
+|---|---|---|
+| `iss` | `microservices-net-2025` | `https://login.microsoftonline.com/{tenant}/v2.0` |
+| `aud` | `microservices-api` | `api://{client-id}` |
+| Roles | `http://schemas.microsoft.com/.../role` | `roles` (array) |
+| Firma | HS256 (clave simétrica) | RS256 (clave asimétrica RSA) |
+| Claves | Compartida en appsettings | Publicadas en JWKS endpoint |
+
+---
+
+### Paso B10 – Variables de entorno para producción
+
+En lugar de poner secretos en `appsettings.json`, usar variables de entorno:
+
+```bash
+# En tu terminal o en el pipeline de CI/CD
+export Auth__Provider="azuread"
+export AzureAd__Instance="https://login.microsoftonline.com/"
+export AzureAd__TenantId="yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyyyyy"
+export AzureAd__ClientId="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+export AzureAd__Audience="api://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+dotnet run
+```
+
+O con **User Secrets** para desarrollo:
+
+```bash
+cd src/Services/ProductService
+dotnet user-secrets set "Auth:Provider" "azuread"
+dotnet user-secrets set "AzureAd:TenantId" "<tu-tenant-id>"
+dotnet user-secrets set "AzureAd:ClientId" "<tu-client-id>"
+dotnet user-secrets set "AzureAd:Audience" "api://<tu-client-id>"
+```
+
+> **🔒 Regla de oro:** NUNCA commitear `TenantId`, `ClientId` o `ClientSecret` en el repositorio.
+
+---
+
+### Resumen: Local vs Azure AD
+
+| Aspecto | JWT Local | Azure AD |
+|---|---|---|
+| **Uso** | Desarrollo, laboratorio | Staging, producción |
+| **Configuración** | `Auth:Provider = "local"` | `Auth:Provider = "azuread"` |
+| **Quién emite tokens** | Nuestro `AuthController` | Microsoft Entra ID |
+| **Algoritmo firma** | HS256 (simétrico) | RS256 (asimétrico) |
+| **Gestión de claves** | Manual (appsettings) | Automática (JWKS) |
+| **Usuarios** | Hardcodeados | Azure AD Users |
+| **Roles** | En código | App Roles en Azure |
+| **MFA** | No | Sí (configurable) |
+| **SSO** | No | Sí |
+| **Costo** | Gratis | Gratis (tier básico) |
+
+---
+
 ## 🏗️ Estructura final de archivos modificados/creados
 
 ```
 src/Services/
 ├── ProductService/
-│   ├── appsettings.json              ← +Jwt section
-│   ├── Program.cs                     ← +Authentication, +Authorization, +Swagger JWT
+│   ├── appsettings.json              ← +Jwt section, +AzureAd section, +Auth:Provider
+│   ├── appsettings.Development.json  ← +Auth:Provider = "local"
+│   ├── Program.cs                     ← +Authentication (dual: local/azuread), +Swagger JWT
 │   ├── DTOs/
 │   │   └── LoginDto.cs               ← NUEVO
 │   └── Controllers/
-│       ├── AuthController.cs          ← NUEVO (genera tokens)
+│       ├── AuthController.cs          ← NUEVO (genera tokens locales)
 │       ├── V1/
 │       │   ├── ProductsV1Controller.cs ← +[Authorize], +[AllowAnonymous]
 │       │   └── ConfigController.cs     ← +[Authorize(Policy = "AdminOnly")]
@@ -926,12 +1393,13 @@ src/Services/
 │           └── ProductsV2Controller.cs ← +[Authorize(Policy = "ReadOnly")]
 │
 └── OrderService/
-    ├── appsettings.json               ← +Jwt section
-    ├── Program.cs                      ← +Authentication, +Authorization
+    ├── appsettings.json               ← +Jwt section, +AzureAd section, +Auth:Provider
+    ├── appsettings.Development.json   ← +Auth:Provider = "local"
+    ├── Program.cs                      ← +Authentication (dual: local/azuread)
     ├── DTOs/
     │   └── LoginDto.cs                ← NUEVO
     └── Controllers/
-        ├── AuthController.cs           ← NUEVO (genera tokens)
+        ├── AuthController.cs           ← NUEVO (genera tokens locales)
         └── OrdersController.cs         ← +[Authorize], +[AllowAnonymous]
 ```
 
@@ -939,7 +1407,7 @@ src/Services/
 
 ## 🚀 Próximos pasos
 
-- **Módulo 9 – API Gateway:** Centralizar la validación de tokens en Ocelot/YARP
-- **Producción:** Reemplazar el AuthController por Azure AD App Registration
+- **Módulo 9 – API Gateway:** Centralizar la validación de tokens en YARP con Azure AD
+- **Azure AD avanzado:** Conditional Access, grupos anidados, custom claims
 - **Mejoras:** Refresh tokens, token revocation, rate limiting por usuario
 
