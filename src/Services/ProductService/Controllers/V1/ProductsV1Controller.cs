@@ -23,6 +23,7 @@ public class ProductsController: ControllerBase
         _logger = logger;
     }
 
+
     [HttpGet]
     [AllowAnonymous]
     [ProducesResponseType(typeof(IEnumerable<ProductDto>), StatusCodes.Status200OK)]

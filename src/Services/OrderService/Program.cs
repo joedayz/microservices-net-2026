@@ -42,7 +42,7 @@ if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
-            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0";
+            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}";
             options.Audience = azureAdConfig["Audience"];
             options.TokenValidationParameters = new TokenValidationParameters
             {
@@ -50,8 +50,17 @@ if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
                 ValidateAudience = true,
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
-                ValidIssuer = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
-                RoleClaimType = "roles"
+                ValidIssuers = new[]
+                {
+                    $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
+                    $"https://sts.windows.net/{azureAdConfig["TenantId"]}/"
+                },
+                ValidAudiences = new[]
+                {
+                    azureAdConfig["Audience"],
+                    azureAdConfig["ClientId"]
+                },
+                RoleClaimType = System.Security.Claims.ClaimTypes.Role
             };
         });
 }

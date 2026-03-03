@@ -88,7 +88,8 @@ if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
-            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0";
+            // Usar Authority v1 para que la metadata acepte tokens v1 de az cli
+            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}";
             options.Audience = azureAdConfig["Audience"];
             options.TokenValidationParameters = new TokenValidationParameters
             {
@@ -96,8 +97,40 @@ if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
                 ValidateAudience = true,
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
-                ValidIssuer = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
-                RoleClaimType = "roles"
+                ValidIssuers = new[]
+                {
+                    $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
+                    $"https://sts.windows.net/{azureAdConfig["TenantId"]}/"
+                },
+                ValidAudiences = new[]
+                {
+                    azureAdConfig["Audience"],
+                    azureAdConfig["ClientId"]
+                },
+                RoleClaimType = System.Security.Claims.ClaimTypes.Role
+            };
+            // Diagnóstico: ver por qué falla la autenticación
+            options.Events = new JwtBearerEvents
+            {
+                OnAuthenticationFailed = context =>
+                {
+                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtBearer");
+                    logger.LogError(context.Exception, "JWT Authentication failed: {Message}", context.Exception.Message);
+                    return Task.CompletedTask;
+                },
+                OnTokenValidated = context =>
+                {
+                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtBearer");
+                    var claims = context.Principal?.Claims.Select(c => $"{c.Type}={c.Value}");
+                    logger.LogInformation("JWT Token validated. Claims: {Claims}", string.Join(", ", claims ?? Array.Empty<string>()));
+                    return Task.CompletedTask;
+                },
+                OnChallenge = context =>
+                {
+                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtBearer");
+                    logger.LogWarning("JWT Challenge: {Error} - {ErrorDescription}", context.Error, context.ErrorDescription);
+                    return Task.CompletedTask;
+                }
             };
         });
 }
