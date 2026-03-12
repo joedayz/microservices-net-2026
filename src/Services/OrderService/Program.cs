@@ -1,9 +1,12 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using OrderService.Clients;
 using OrderService.Domain;
 using OrderService.Infrastructure;
+using Polly;
+using Polly.CircuitBreaker;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,7 +27,10 @@ else
     builder.Services.AddHttpClient<IProductServiceClient, HttpProductServiceClient>(client =>
     {
         client.BaseAddress = new Uri(httpUrl);
-    });
+    })
+    .AddPolicyHandler(ResiliencePolicies.GetRetryPolicy())
+    .AddPolicyHandler(ResiliencePolicies.GetCircuitBreakerPolicy())
+    .AddPolicyHandler(ResiliencePolicies.GetTimeoutPolicy());
 }
 
 builder.Services.AddSingleton<IOrderRepository, InMemoryOrderRepository>();
@@ -99,6 +105,15 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddOpenApi();
 
+// ============================
+// Health Checks
+// ============================
+builder.Services.AddHealthChecks()
+    .AddUrlGroup(
+        new Uri($"{httpUrl}/api/v1/Products"),
+        name: "product-service",
+        tags: new[] { "dependency" });
+
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenLocalhost(5003, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
@@ -115,5 +130,35 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// ============================
+// Health Check Endpoints
+// ============================
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = _ => true,
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        var result = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(e => new
+            {
+                name = e.Key,
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                duration = e.Value.Duration.TotalMilliseconds + "ms"
+            }),
+            totalDuration = report.TotalDuration.TotalMilliseconds + "ms"
+        };
+        await context.Response.WriteAsJsonAsync(result);
+    }
+});
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false  // Liveness: solo verifica que el proceso responde
+});
 
 app.Run();

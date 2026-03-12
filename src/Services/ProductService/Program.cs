@@ -3,6 +3,7 @@ using Asp.Versioning;
 using Asp.Versioning.ApiExplorer;
 using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -226,6 +227,27 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddScoped<IProductRepository, EfProductRepository>();
 builder.Services.AddScoped<IProductService, ProductService.Application.Services.ProductService>();
 
+// ============================
+// Health Checks
+// ============================
+var healthChecksBuilder = builder.Services.AddHealthChecks();
+
+if (!string.IsNullOrEmpty(connectionString))
+{
+    healthChecksBuilder.AddNpgSql(
+        connectionString,
+        name: "postgresql",
+        tags: new[] { "db", "dependency" });
+}
+
+if (!string.IsNullOrEmpty(redisConnection))
+{
+    healthChecksBuilder.AddRedis(
+        redisConnection,
+        name: "redis",
+        tags: new[] { "cache", "dependency" });
+}
+
 // Agregar Azure App Configuration (ANTES de builder.Build())
 // Usar AppConfig:Enabled=false en Development para evitar bloqueos si Azure es lento
 var appConfigEnabled = builder.Configuration.GetValue<bool>("AppConfig:Enabled", true);
@@ -290,6 +312,36 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapGrpcService<ProductGrpcService>();
 app.MapGrpcReflectionService();
+
+// ============================
+// Health Check Endpoints
+// ============================
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = _ => true,
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        var result = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(e => new
+            {
+                name = e.Key,
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                duration = e.Value.Duration.TotalMilliseconds + "ms"
+            }),
+            totalDuration = report.TotalDuration.TotalMilliseconds + "ms"
+        };
+        await context.Response.WriteAsJsonAsync(result);
+    }
+});
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false  // Liveness: solo verifica que el proceso responde
+});
 
 // =========================
 // Seed inicial
