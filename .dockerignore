@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/node_modules/
+**/*.user
+**/*.suo
+**/Thumbs.db
+**/.DS_Store
+**/TestResults/
+**/docker-compose*.yml
+**/infrastructure/
+**/docs/
+**/*.md
+**/local.settings.json
+**/.git/
+**/.gitignore

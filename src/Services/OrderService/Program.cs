@@ -114,9 +114,10 @@ builder.Services.AddHealthChecks()
         name: "product-service",
         tags: new[] { "dependency" });
 
+// ListenAnyIP para que funcione dentro de contenedores Docker
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenLocalhost(5003, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    options.ListenAnyIP(5003, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
 });
 
 var app = builder.Build();

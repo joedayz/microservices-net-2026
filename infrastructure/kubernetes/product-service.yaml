@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: product-service-config
+  namespace: microservices
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  Auth__Provider: "local"
+  Messaging__Provider: "rabbitmq"
+  AppConfig__Enabled: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  namespace: microservices
+  labels:
+    app: product-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      containers:
+        - name: product-service
+          image: ${ACR_NAME}.azurecr.io/product-service:latest
+          ports:
+            - containerPort: 5001
+              name: http
+            - containerPort: 5002
+              name: grpc
+          envFrom:
+            - configMapRef:
+                name: product-service-config
+          env:
+            - name: ConnectionStrings__DefaultConnection
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: CONNECTION_STRING
+            - name: ConnectionStrings__Redis
+              value: "redis:6379"
+            - name: ConnectionStrings__RabbitMq
+              value: "amqp://guest:guest@rabbitmq:5672"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 5001
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: microservices
+spec:
+  selector:
+    app: product-service
+  ports:
+    - port: 5001
+      targetPort: 5001
+      name: http
+    - port: 5002
+      targetPort: 5002
+      name: grpc
+  type: ClusterIP

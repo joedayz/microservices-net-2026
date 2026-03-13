@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: microservices-ingress
+  namespace: microservices
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: microservices.local
+      http:
+        paths:
+          # Gateway — punto de entrada principal
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 80
+          # Acceso directo a ProductService (opcional, para debug)
+          - path: /direct/products
+            pathType: Prefix
+            backend:
+              service:
+                name: product-service
+                port:
+                  number: 5001
+          # Health checks directos
+          - path: /health/product-service
+            pathType: Exact
+            backend:
+              service:
+                name: product-service
+                port:
+                  number: 5001
+          - path: /health/order-service
+            pathType: Exact
+            backend:
+              service:
+                name: order-service
+                port:
+                  number: 5003

@@ -46,6 +46,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpGet("available-products")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(IEnumerable<ProductInfo>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<ProductInfo>>> GetAvailableProducts(CancellationToken cancellationToken)
     {

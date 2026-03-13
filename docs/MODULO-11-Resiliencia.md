@@ -297,7 +297,44 @@ cd src/Gateway
 dotnet run
 ```
 
-### 2. Probar Health Checks
+### 2. Obtener un JWT token (necesario para endpoints protegidos)
+
+OrderService tiene `[Authorize]` a nivel de controlador. Los endpoints `GET /api/v1/Orders` y `GET /api/v1/Orders/available-products` son `[AllowAnonymous]`, pero **crear y eliminar órdenes requieren token con rol Admin**.
+
+**Usuarios de prueba disponibles:**
+
+| Usuario | Contraseña | Rol |
+|---------|-----------|-----|
+| `admin` | `admin123` | Admin |
+| `reader` | `reader123` | Reader |
+| `user` | `user123` | User |
+
+```bash
+# Obtener token (desde OrderService o ProductService — ambos tienen AuthController)
+TOKEN=$(curl -s -X POST http://localhost:5003/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
+
+echo $TOKEN
+```
+
+**Usar el token en endpoints protegidos:**
+```bash
+# Crear una orden (requiere rol Admin)
+curl -s -X POST http://localhost:5003/api/v1/Orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "customerName": "Juan Pérez",
+    "items": [
+      { "productId": "<PRODUCT_ID>", "quantity": 1 }
+    ]
+  }' | jq
+```
+
+> **Nota:** Los endpoints de lectura (`GET /api/v1/Orders`, `GET /api/v1/Orders/available-products`) y los health checks (`/health`, `/health/live`) **no requieren token**.
+
+### 3. Probar Health Checks
 
 ```bash
 # ProductService health (con detalle de PostgreSQL y Redis)
@@ -307,12 +344,12 @@ curl -s http://localhost:5001/health | jq
 curl -s http://localhost:5003/health | jq
 
 # Gateway health (verifica ambos servicios)
-curl -s http://localhost:5000/health | jq
+curl -s http://localhost:5010/health | jq
 
 # Liveness probe (respuesta mínima)
 curl -s http://localhost:5001/health/live
 curl -s http://localhost:5003/health/live
-curl -s http://localhost:5000/health/live
+curl -s http://localhost:5010/health/live
 ```
 
 **Respuesta esperada de `/health`:**
@@ -337,7 +374,9 @@ curl -s http://localhost:5000/health/live
 }
 ```
 
-### 3. Probar Retry + Circuit Breaker
+### 4. Probar Retry + Circuit Breaker
+
+> **Nota:** El endpoint `available-products` es `[AllowAnonymous]`, no requiere token. Estos comandos funcionan directamente sin autenticación.
 
 #### a) Funcionamiento normal (ProductService arriba)
 ```bash
@@ -385,7 +424,7 @@ curl -s http://localhost:5003/api/v1/Orders/available-products | jq
 # [CircuitBreaker] CLOSED — recovered.
 ```
 
-### 4. Probar Fallback cache
+### 5. Probar Fallback cache
 
 ```bash
 # 1. Primero, hacer una llamada exitosa (llena el cache)
@@ -400,7 +439,7 @@ curl -s http://localhost:5003/api/v1/Orders/available-products | jq
 # [Fallback] Returning 3 cached products
 ```
 
-### 5. Probar Timeout
+### 6. Probar Timeout
 
 Para probar el timeout, puedes simular un servicio lento con un debugger o agregar un `await Task.Delay(15000)` temporal en el controlador de ProductService. Si la respuesta tarda más de 10 segundos, Polly cancela la petición y activa el retry.
 

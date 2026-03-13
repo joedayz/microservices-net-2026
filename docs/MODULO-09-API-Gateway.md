@@ -246,28 +246,28 @@ dotnet sln add ../../Gateway/Gateway.csproj
    cd src/Gateway
    dotnet run
    ```
-   Debe escuchar en **http://localhost:5000**.
+   Debe escuchar en **http://localhost:5010**.
 
 3. **Peticiones vía gateway (mismo path que a los servicios):**
 
    **Productos (GET):**
    ```bash
-   curl http://localhost:5000/api/v1/Products
+   curl http://localhost:5010/api/v1/Products
    ```
 
    **Producto por ID:**
    ```bash
-   curl http://localhost:5000/api/v1/Products/{id}
+   curl http://localhost:5010/api/v1/Products/{id}
    ```
 
    **Órdenes – productos disponibles:**
    ```bash
-   curl http://localhost:5000/api/v1/Orders/available-products
+   curl http://localhost:5010/api/v1/Orders/available-products
    ```
 
    **Órdenes (GET):**
    ```bash
-   curl http://localhost:5000/api/v1/Orders
+   curl http://localhost:5010/api/v1/Orders
    ```
 
 Si los backends responden correctamente cuando se llaman directo (5001 y 5003), y por el gateway (5000) obtienes las mismas respuestas, el módulo está funcionando.
@@ -283,21 +283,21 @@ Si quieres servir la UI de Swagger de ProductService a través del gateway, aña
 }
 ```
 
-Luego podrías abrir `http://localhost:5000/swagger` y ver la documentación de ProductService (si ese servicio expone Swagger en `/swagger`).
+Luego podrías abrir `http://localhost:5010/swagger` y ver la documentación de ProductService (si ese servicio expone Swagger en `/swagger`).
 
 ### ✅ Checklist
 
 - [ ] Proyecto Gateway creado con .NET 10 y paquete `Yarp.ReverseProxy`.
 - [ ] `Program.cs` usa `AddReverseProxy()` y `LoadFromConfig(ReverseProxy)`.
 - [ ] `appsettings.json` tiene rutas para Products y Orders y clusters con las URLs correctas.
-- [ ] Gateway escucha en el puerto 5000.
-- [ ] Con ProductService y OrderService en marcha, `curl http://localhost:5000/api/v1/Products` y `curl http://localhost:5000/api/v1/Orders/available-products` responden correctamente.
+- [ ] Gateway escucha en el puerto 5010.
+- [ ] Con ProductService y OrderService en marcha, `curl http://localhost:5010/api/v1/Products` y `curl http://localhost:5010/api/v1/Orders/available-products` responden correctamente.
 
 ### 🐛 Solución de problemas
 
 - **502 Bad Gateway:** El backend (5001 o 5003) no está corriendo o la URL del cluster es incorrecta. Comprueba que los servicios arrancan y que `Address` en `ReverseProxy:Clusters` es la correcta.
 - **404 en una ruta:** Revisa que el `Path` de la ruta coincida exactamente con lo que pides (incluido `/api/v1/...`). El orden de las rutas puede influir; rutas más específicas suelen ir antes.
-- **Puerto 5000 en uso:** Cambia el puerto en `ListenLocalhost(5000, ...)` y en las llamadas de prueba (por ejemplo 5005).
+- **Puerto 5010 en uso:** Cambia el puerto en `ListenLocalhost(5010, ...)` y en las llamadas de prueba.
 
 ### Próximos pasos
 
@@ -459,7 +459,7 @@ Si configuraste el path suffix distinto (ej. solo `products`), usa la URL que te
 
 ### Cambiar entre YARP y APIM
 
-- **YARP:** El cliente llama a `http://localhost:5000/api/v1/Products`; no necesitas subscription key.
+- **YARP:** El cliente llama a `http://localhost:5010/api/v1/Products`; no necesitas subscription key.
 - **APIM:** El cliente llama a `https://<APIM_NAME>.azure-api.net/...` y envía el header `Ocp-Apim-Subscription-Key`. Puedes usar la misma app cliente y solo cambiar la **base URL** y los headers según el entorno (desarrollo = YARP, producción = APIM) vía configuración o variables de entorno.
 
 ### ✅ Checklist (opción APIM)

@@ -217,10 +217,11 @@ builder.Services.AddGrpc();
 builder.Services.AddGrpcReflection();
 
 // Kestrel: REST en 5001, gRPC en 5002
+// ListenAnyIP para que funcione dentro de contenedores Docker
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenLocalhost(5001, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
-    options.ListenLocalhost(5002, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
+    options.ListenAnyIP(5001, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    options.ListenAnyIP(5002, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
 });
 
 // DI
