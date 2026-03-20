@@ -59,7 +59,7 @@ Dockerizar los 3 microservicios y prepararlos para ACR:
 | `.dockerignore` | **NUEVO** — Excluye `bin/`, `obj/`, `.vs/`, docs |
 | `src/Services/ProductService/Dockerfile` | **NUEVO** — Multi-stage build, puertos 5001+5002 |
 | `src/Services/OrderService/Dockerfile` | **NUEVO** — Multi-stage build, puerto 5003, copia proto compartido |
-| `src/Gateway/Dockerfile` | **NUEVO** — Multi-stage build, puerto 5000 |
+| `src/Gateway/Dockerfile` | **NUEVO** — Multi-stage build, puerto 5010 |
 | `docker-compose.apps.yml` | **NUEVO** — Orquestación completa con infra + servicios |
 | `ProductService/Program.cs` | `ListenLocalhost` → `ListenAnyIP` (para Docker) |
 | `OrderService/Program.cs` | `ListenLocalhost` → `ListenAnyIP` (para Docker) |
@@ -102,7 +102,7 @@ options.ListenAnyIP(5001, o => o.Protocols = HttpProtocols.Http1);
 Este cambio se aplicó en los 3 servicios:
 - **ProductService**: puertos 5001 (HTTP/1) y 5002 (HTTP/2 gRPC)
 - **OrderService**: puerto 5003 (HTTP/1)
-- **Gateway**: puerto 5000 (HTTP/1)
+- **Gateway**: puerto 5010 (HTTP/1)
 
 > **Nota:** `ListenAnyIP` también funciona en desarrollo local, por lo que el cambio es compatible.
 
@@ -179,9 +179,9 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 RUN adduser --disabled-password --gecos "" appuser
 COPY --from=build /app/publish .
-EXPOSE 5000
+EXPOSE 5010
 ENV ASPNETCORE_ENVIRONMENT=Production
-USER appuser
+USER app
 ENTRYPOINT ["dotnet", "Gateway.dll"]
 ```
 
@@ -229,49 +229,69 @@ az acr login --name myacrjoedayzregistry
 # Build con Docker
 # Nota: --platform linux/amd64 genera imágenes para clusters AKS (amd64).
 # Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
-docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:v1 \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:latest \
   -f src/Services/ProductService/Dockerfile src/Services/
 
-docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/order-service:v1 \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/order-service:latest \
   -f src/Services/OrderService/Dockerfile src/Services/
 
-docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/gateway:v1 \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/gateway:latest \
   -f src/Gateway/Dockerfile src/Gateway/
 
 # Push
-docker push myacrjoedayzregistry.azurecr.io/product-service:v1
-docker push myacrjoedayzregistry.azurecr.io/order-service:v1
-docker push myacrjoedayzregistry.azurecr.io/gateway:v1
+docker push myacrjoedayzregistry.azurecr.io/product-service:latest
+docker push myacrjoedayzregistry.azurecr.io/order-service:latest
+docker push myacrjoedayzregistry.azurecr.io/gateway:latest
 ```
 
 #### c) Con Podman (alternativa)
 ```bash
-podman login myacrjoedayzregistry.azurecr.io
+# Login con token (evita prompt interactivo)
+TOKEN=$(az acr login --name myacrjoedayzregistry --expose-token --output tsv --query accessToken)
+echo "$TOKEN" | podman login myacrjoedayzregistry.azurecr.io \
+  -u 00000000-0000-0000-0000-000000000000 \
+  --password-stdin
 
-podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:v1 \
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:latest \
   -f src/Services/ProductService/Dockerfile src/Services/
 
-podman push myacrjoedayzregistry.azurecr.io/product-service:v1
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/order-service:latest \
+  -f src/Services/OrderService/Dockerfile src/Services/
+
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/gateway:latest \
+  -f src/Gateway/Dockerfile src/Gateway/
+
+podman push myacrjoedayzregistry.azurecr.io/product-service:latest
+podman push myacrjoedayzregistry.azurecr.io/order-service:latest
+podman push myacrjoedayzregistry.azurecr.io/gateway:latest
 ```
 
 #### d) Build directo en ACR (sin Docker local)
 ```bash
 az acr build --registry myacrjoedayzregistry \
-  --image product-service:v1 \
+  --image product-service:latest \
   --file src/Services/ProductService/Dockerfile src/Services/
 ```
 
 ---
 
-## 🧪 Cómo probar localmente
+## 🧪 Cómo probar localmente (primero Podman)
 
-### 1. Build y run con Docker Compose
+### 1. Build y run con Podman Compose
 
 ```bash
 # Desde la raíz del proyecto
-docker compose -f docker-compose.yml -f docker-compose.apps.yml up --build
+podman compose -f docker-compose.yml -f docker-compose.apps.yml up --build
 
 # Esperar a que todos los servicios estén healthy (~30-60 segundos)
+```
+
+> Si `podman compose` no está disponible, revisa `docs/PODMAN-SETUP.md`.
+
+### 1.b Alternativa con Docker Compose
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.apps.yml up --build
 ```
 
 ### 2. Verificar servicios
@@ -296,7 +316,7 @@ curl -s http://localhost:5003/api/v1/Orders/available-products | jq
 ### 3. Build individual (para debug)
 
 ```bash
-# Build solo ProductService
+# Build solo ProductService (Docker)
 docker build --platform linux/amd64 -t product-service:dev \
   -f src/Services/ProductService/Dockerfile src/Services/
 
@@ -307,15 +327,51 @@ docker run --rm -p 5001:5001 \
   -e Auth__Provider=local \
   -e AppConfig__Enabled=false \
   product-service:dev
+
+# Build solo ProductService (Podman)
+podman build --platform linux/amd64 -t product-service:dev \
+  -f src/Services/ProductService/Dockerfile src/Services/
+
+podman run --rm -p 5001:5001 \
+  -e ConnectionStrings__DefaultConnection="Host=host.containers.internal;Port=5432;Database=microservices_db;Username=postgres;Password=postgres" \
+  -e ConnectionStrings__Redis="host.containers.internal:6379" \
+  -e Auth__Provider=local \
+  -e AppConfig__Enabled=false \
+  product-service:dev
 ```
 
 ### 4. Detener todo
 
 ```bash
+# Podman
+podman compose -f docker-compose.yml -f docker-compose.apps.yml down
+podman compose -f docker-compose.yml -f docker-compose.apps.yml down -v
+
+# Docker
 docker compose -f docker-compose.yml -f docker-compose.apps.yml down
-# Con volúmenes (borra datos):
 docker compose -f docker-compose.yml -f docker-compose.apps.yml down -v
 ```
+
+---
+
+## ☁️ De local a Azure (ACR + AKS)
+
+Cuando lo valides localmente, despliega en AKS con las mismas imágenes `:latest`:
+
+```bash
+# 1) Asegurar login Azure y contexto AKS
+az login
+az aks get-credentials --resource-group rg-microservices --name aks-microservices --overwrite-existing
+kubectl config use-context aks-microservices
+
+# 2) Deploy en AKS usando ACR
+./infrastructure/kubernetes/deploy.sh myacrjoedayzregistry
+
+# 3) Probar endpoint público
+kubectl get svc gateway -n microservices -w
+```
+
+Para troubleshooting operativo (probes, ImagePullBackOff, cleanup), usa `docs/MODULO-12-AKS.md` como fuente principal.
 
 ---
 
@@ -325,7 +381,7 @@ docker compose -f docker-compose.yml -f docker-compose.apps.yml down -v
                     ┌──────────────────────────────────────┐
                     │           Docker Network              │
                     │           (microservices)              │
-  Puerto 5000  ┌───┴───────┐                               │
+  Puerto 5010  ┌───┴───────┐                               │
   ────────────►│  Gateway   │                               │
                │  (YARP)    │                               │
                └──┬────┬────┘                               │
