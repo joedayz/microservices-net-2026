@@ -30,6 +30,7 @@ spec:
       containers:
         - name: order-service
           image: ${ACR_NAME}.azurecr.io/order-service:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5003
               name: http

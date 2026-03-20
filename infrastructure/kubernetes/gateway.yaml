@@ -28,6 +28,7 @@ spec:
       containers:
         - name: gateway
           image: ${ACR_NAME}.azurecr.io/gateway:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5010
               name: http

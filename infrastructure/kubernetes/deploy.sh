@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ACR_NAME="${1:-}"
+LOCAL_IMAGE_PREFIX="${LOCAL_IMAGE_PREFIX:-}"
 
 echo "=== Desplegando microservicios en Kubernetes ==="
 
@@ -42,9 +43,14 @@ if [ -n "$ACR_NAME" ]; then
         sed "s|\${ACR_NAME}|$ACR_NAME|g" "$SCRIPT_DIR/$f" | kubectl apply -f -
     done
 else
-    echo "→ Usando imágenes locales (sin ACR)"
+    CURRENT_CONTEXT="$(kubectl config current-context 2>/dev/null || true)"
+    if [ -z "$LOCAL_IMAGE_PREFIX" ] && [[ "$CURRENT_CONTEXT" == kind-* ]]; then
+        echo "⚠️  Contexto kind detectado. Con Podman normalmente necesitas LOCAL_IMAGE_PREFIX=localhost/"
+    fi
+
+    echo "→ Usando imágenes locales (sin ACR), prefijo: '${LOCAL_IMAGE_PREFIX}'"
     for f in product-service.yaml order-service.yaml gateway.yaml; do
-        sed 's|\${ACR_NAME}.azurecr.io/||g' "$SCRIPT_DIR/$f" | kubectl apply -f -
+        sed "s|\${ACR_NAME}.azurecr.io/|$LOCAL_IMAGE_PREFIX|g" "$SCRIPT_DIR/$f" | kubectl apply -f -
     done
 fi
 

@@ -135,7 +135,7 @@ readinessProbe:
 #### RabbitMQ
 - **Deployment** con imagen `rabbitmq:4-management-alpine`
 - Dos puertos: 5672 (AMQP) y 15672 (Management UI)
-- Probes con `rabbitmq-diagnostics check_port_connectivity`
+- Probes con `rabbitmq-diagnostics -q ping` (startup/readiness/liveness)
 
 ---
 
@@ -248,6 +248,7 @@ spec:
       http:
         paths:
           - path: /
+            pathType: Prefix
             backend:
               service:
                 name: gateway
@@ -394,56 +395,321 @@ brew install kind
 KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name microservices
 
 # 5. Verificar conexión
+# ⚠️  IMPORTANTE — el contexto de kubectl con Podman + Kind se llama "kind-microservices"
+#   (Kind antepone "kind-" al nombre del cluster). Si ves "connection refused", el kubeconfig
+#   tiene una entrada stale con un puerto antiguo; regenera con:
+KIND_EXPERIMENTAL_PROVIDER=podman kind export kubeconfig --name microservices
 kubectl config use-context kind-microservices
 kubectl get nodes
+# NAME                          STATUS   ROLES           AGE
+# microservices-control-plane   Ready    control-plane   ...
 
-# 6. Build de imágenes con Podman y cargarlas al cluster Kind
-# Nota: --platform linux/amd64 genera imágenes para clusters amd64.
-# Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
-podman build --platform linux/amd64 -t product-service:latest \
+# 6. Build de imágenes con Podman
+# ⚠️  Podman etiqueta las imágenes locales con prefijo "localhost/" automáticamente.
+#   Usa ese mismo prefijo en el build para que coincida con lo que se cargará en Kind.
+podman build --platform linux/amd64 -t localhost/product-service:latest \
   -f src/Services/ProductService/Dockerfile src/Services/
-podman build --platform linux/amd64 -t order-service:latest \
+podman build --platform linux/amd64 -t localhost/order-service:latest \
   -f src/Services/OrderService/Dockerfile src/Services/
-podman build --platform linux/amd64 -t gateway:latest \
+podman build --platform linux/amd64 -t localhost/gateway:latest \
   -f src/Gateway/Dockerfile src/Gateway/
 
-# Cargar imágenes al cluster Kind (necesario porque Kind no comparte el daemon)
-# Podman usa prefijo localhost/ en las imágenes locales
-KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/product-service:latest --name microservices
-KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/order-service:latest --name microservices
-KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/gateway:latest --name microservices
+# 7. Cargar imágenes al cluster Kind
+# ⚠️  Kind no comparte el daemon con Podman, hay que cargar las imágenes explícitamente.
+#   "kind load docker-image" no detecta imágenes de Podman directamente;
+#   usa el método image-archive (exportar a tar + cargar) que es el más estable.
+podman save -o /tmp/product-service-latest.tar localhost/product-service:latest
+podman save -o /tmp/order-service-latest.tar localhost/order-service:latest
+podman save -o /tmp/gateway-latest.tar localhost/gateway:latest
 
-# 7. Desplegar
-./infrastructure/kubernetes/deploy.sh
+# ⚠️  El flag --name usa el nombre Kind del cluster ("microservices"), NO el contexto kubectl ("kind-microservices")
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/product-service-latest.tar --name microservices
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/order-service-latest.tar --name microservices
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/gateway-latest.tar --name microservices
 
-# 8. Acceder al Gateway
+# 8. Desplegar
+# ⚠️  SIEMPRE pasar LOCAL_IMAGE_PREFIX=localhost/ para que los manifiestos
+#   usen "localhost/product-service:latest" en lugar de buscarlo en Docker Hub.
+LOCAL_IMAGE_PREFIX=localhost/ ./infrastructure/kubernetes/deploy.sh
+
+# 9. Acceder al Gateway
 kubectl port-forward svc/gateway 5010:80 -n microservices
 curl http://localhost:5010/health | jq
 ```
 
-> **Nota:** Con Kind, las imágenes deben cargarse explícitamente al cluster con `kind load docker-image`. Esto no es necesario con Docker Desktop.
+> **Problemas comunes con Podman + Kind:**
+>
+> | Síntoma | Causa | Solución |
+> |---------|-------|----------|
+> | `connection refused` en `kubectl get nodes` | Contexto stale en kubeconfig (puerto muerto) | `KIND_EXPERIMENTAL_PROVIDER=podman kind export kubeconfig --name <cluster>` |
+> | `ImagePullBackOff` / `ErrImagePull` desde Docker Hub | Imágenes sin prefijo, Kubernetes intenta pull externo | Usar `LOCAL_IMAGE_PREFIX=localhost/ ./deploy.sh` |
+> | `kind load docker-image` → "not present locally" | Kind no accede al daemon de Podman directamente | Usar `podman save` + `kind load image-archive` |
+> | `kind load --name kind-microservices` → "no nodes found" | El nombre Kind es `microservices`, no `kind-microservices` | Usar `--name microservices` (sin prefijo `kind-`) |
 
 ### Verificar estado del cluster
 
 ```bash
-# Ver todos los recursos
-kubectl get all -n microservices
-
-# Ver pods con estado
+# Ver todos los pods (todos deben ser 1/1 Running)
 kubectl get pods -n microservices -o wide
+
+# Ver todos los recursos (deployments, services, ingress)
+kubectl get all -n microservices
 
 # Ver logs de un servicio
 kubectl logs -l app=product-service -n microservices --tail=50
+kubectl logs -l app=order-service -n microservices --tail=50
 
-# Describir un pod (para debug)
+# Describir un pod con problemas
 kubectl describe pod -l app=product-service -n microservices
-
-# Health checks
-kubectl port-forward svc/product-service 5001:5001 -n microservices
-curl http://localhost:5001/health | jq
 
 # Escalar manualmente
 kubectl scale deployment product-service --replicas=3 -n microservices
+```
+
+---
+
+### Validar endpoints — ProductService y OrderService
+
+> **Requisito:** Todos los pods en `1/1 Running`. Abre **terminales separadas** para los port-forward.
+
+
+
+**Alternativa (1 sola terminal): scripts listos**
+
+# Bash / Zsh
+curl -s http://localhost:5010/health | jq
+curl -s http://localhost:5001/health | jq
+curl -s http://localhost:5003/health | jq
+
+curl -s http://localhost:5001/health/live
+curl -s http://localhost:5003/health/live> Si estas en Bash/Zsh usa `port-forward-all.sh`; si estas en PowerShell usa `port-forward-all.ps1`.
+
+```bash
+# macOS / Linux
+./infrastructure/kubernetes/port-forward-all.sh
+
+# Opcional: namespace distinto
+./infrastructure/kubernetes/port-forward-all.sh microservices
+```
+
+```powershell
+# Windows PowerShell
+./infrastructure/kubernetes/port-forward-all.ps1
+
+# Opcional: namespace distinto
+./infrastructure/kubernetes/port-forward-all.ps1 -Namespace microservices
+```
+
+---
+
+#### 1. Health checks
+
+```bash
+# macOS / Linux
+curl -s http://localhost:5010/health | jq          # Gateway (JSON)
+curl -s http://localhost:5001/health | jq          # ProductService (JSON)
+curl -s http://localhost:5003/health | jq          # OrderService (JSON)
+curl -s http://localhost:5001/health/live          # ProductService liveness (text/plain)
+curl -s http://localhost:5003/health/live          # OrderService liveness (text/plain)
+
+# Windows (PowerShell)
+Invoke-RestMethod http://localhost:5010/health | ConvertTo-Json
+Invoke-RestMethod http://localhost:5001/health | ConvertTo-Json
+Invoke-RestMethod http://localhost:5003/health | ConvertTo-Json
+Invoke-WebRequest http://localhost:5001/health/live | Select-Object -ExpandProperty Content
+Invoke-WebRequest http://localhost:5003/health/live | Select-Object -ExpandProperty Content
+```
+
+---
+
+#### 2. Obtener JWT token (requerido para operaciones de escritura)
+
+Los endpoints GET son anónimos. POST, PUT y DELETE requieren rol `Admin`.
+
+```bash
+# macOS / Linux — obtener token de ProductService
+TOKEN=$(curl -s -X POST http://localhost:5001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
+
+echo "Token: $TOKEN"
+
+# Windows (PowerShell)
+$response = Invoke-RestMethod -Method Post http://localhost:5001/api/auth/login `
+  -ContentType "application/json" `
+  -Body '{"username":"admin","password":"admin123"}'
+$TOKEN = $response.token
+Write-Host "Token: $TOKEN"
+```
+
+> **Usuarios disponibles:** `admin/admin123` (Admin), `reader/reader123` (Reader), `user/user123` (User)
+
+---
+
+#### 3. ProductService — CRUD completo
+
+```bash
+# --- GET todos los productos (anónimo) ---
+curl -s http://localhost:5001/api/v1/Products | jq
+# También via Gateway:
+curl -s http://localhost:5010/api/v1/Products | jq
+
+# --- POST crear producto (requiere token Admin) ---
+PRODUCT=$(curl -s -X POST http://localhost:5001/api/v1/Products \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "name": "Laptop Pro",
+    "description": "High-performance laptop",
+    "price": 1299.99,
+    "stock": 10
+  }')
+echo $PRODUCT | jq
+PRODUCT_ID=$(echo $PRODUCT | jq -r '.id')
+echo "Product ID: $PRODUCT_ID"
+
+# --- POST segundo producto (para probar la orden con múltiples items) ---
+PRODUCT2=$(curl -s -X POST http://localhost:5001/api/v1/Products \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "name": "Mouse Inalámbrico",
+    "description": "Mouse ergonómico inalámbrico",
+    "price": 49.99,
+    "stock": 50
+  }')
+PRODUCT_ID2=$(echo $PRODUCT2 | jq -r '.id')
+echo "Product 2 ID: $PRODUCT_ID2"
+
+# --- GET producto por ID (anónimo) ---
+curl -s http://localhost:5001/api/v1/Products/$PRODUCT_ID | jq
+
+# --- PUT actualizar producto (requiere token Admin) ---
+curl -s -X PUT http://localhost:5001/api/v1/Products/$PRODUCT_ID \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "name": "Laptop Pro Max",
+    "description": "High-performance laptop - updated",
+    "price": 1499.99,
+    "stock": 8
+  }'
+# → HTTP 204 No Content
+
+# --- Verificar actualización ---
+curl -s http://localhost:5001/api/v1/Products/$PRODUCT_ID | jq
+```
+
+```powershell
+# Windows (PowerShell)
+
+# GET todos
+Invoke-RestMethod http://localhost:5001/api/v1/Products | ConvertTo-Json
+
+# POST crear producto
+$product = Invoke-RestMethod -Method Post http://localhost:5001/api/v1/Products `
+  -ContentType "application/json" `
+  -Headers @{Authorization="Bearer $TOKEN"} `
+  -Body '{"name":"Laptop Pro","description":"High-performance laptop","price":1299.99,"stock":10}'
+$PRODUCT_ID = $product.id
+Write-Host "Product ID: $PRODUCT_ID"
+
+# GET por ID
+Invoke-RestMethod "http://localhost:5001/api/v1/Products/$PRODUCT_ID" | ConvertTo-Json
+```
+
+---
+
+#### 4. OrderService — CRUD completo
+
+```bash
+# --- GET productos disponibles (llama a ProductService internamente) ---
+# Valida que OrderService puede comunicarse con ProductService via HTTP/gRPC
+curl -s http://localhost:5003/api/v1/Orders/available-products | jq
+# También via Gateway:
+curl -s http://localhost:5010/api/v1/Orders/available-products | jq
+
+# --- GET todas las órdenes (anónimo) ---
+curl -s http://localhost:5003/api/v1/Orders | jq
+
+# --- POST crear orden (requiere token Admin, usa IDs obtenidos arriba) ---
+ORDER=$(curl -s -X POST http://localhost:5003/api/v1/Orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"customerName\": \"Joe Diaz\",
+    \"items\": [
+      { \"productId\": \"$PRODUCT_ID\",  \"quantity\": 2 },
+      { \"productId\": \"$PRODUCT_ID2\", \"quantity\": 1 }
+    ]
+  }")
+echo $ORDER | jq
+ORDER_ID=$(echo $ORDER | jq -r '.id')
+echo "Order ID: $ORDER_ID"
+
+# --- GET orden por ID ---
+curl -s http://localhost:5003/api/v1/Orders/$ORDER_ID | jq
+
+# --- DELETE orden (requiere token Admin) ---
+curl -s -X DELETE http://localhost:5003/api/v1/Orders/$ORDER_ID \
+  -H "Authorization: Bearer $TOKEN"
+# → HTTP 204 No Content
+
+# --- Verificar que se eliminó ---
+curl -s http://localhost:5003/api/v1/Orders | jq
+```
+
+```powershell
+# Windows (PowerShell)
+
+# GET productos disponibles (comunicación inter-servicio)
+Invoke-RestMethod http://localhost:5003/api/v1/Orders/available-products | ConvertTo-Json -Depth 3
+
+# POST crear orden
+$orderBody = @{
+  customerName = "Joe Diaz"
+  items = @(
+    @{ productId = $PRODUCT_ID; quantity = 2 }
+  )
+} | ConvertTo-Json
+$order = Invoke-RestMethod -Method Post http://localhost:5003/api/v1/Orders `
+  -ContentType "application/json" `
+  -Headers @{Authorization="Bearer $TOKEN"} `
+  -Body $orderBody
+$ORDER_ID = $order.id
+Write-Host "Order ID: $ORDER_ID"
+
+# GET orden por ID
+Invoke-RestMethod "http://localhost:5003/api/v1/Orders/$ORDER_ID" | ConvertTo-Json -Depth 3
+```
+
+---
+
+#### 5. Validar rutas via Gateway (YARP)
+
+El Gateway solo enruta los paths configurados en `appsettings.json`:
+
+| Ruta en Gateway | Destino |
+|----------------|---------|
+| `GET /api/v1/Products` | ProductService:5001 |
+| `GET /api/v1/Products/{id}` | ProductService:5001 |
+| `GET /api/v1/Orders` | OrderService:5003 |
+| `GET /api/v1/Orders/available-products` | OrderService:5003 |
+| `GET /swagger/{**}` | ProductService:5001 |
+
+> **Nota:** `/api/auth/login` no está enrutado en el Gateway. El token se obtiene directamente de cada servicio.
+
+```bash
+# macOS / Linux — todo via Gateway (port-forward svc/gateway 5010:80)
+curl -s http://localhost:5010/api/v1/Products | jq
+curl -s http://localhost:5010/api/v1/Products/$PRODUCT_ID | jq
+curl -s http://localhost:5010/api/v1/Orders | jq
+curl -s http://localhost:5010/api/v1/Orders/available-products | jq
+
+# Windows (PowerShell)
+Invoke-RestMethod "http://localhost:5010/api/v1/Products" | ConvertTo-Json
+Invoke-RestMethod "http://localhost:5010/api/v1/Orders" | ConvertTo-Json
+Invoke-RestMethod "http://localhost:5010/api/v1/Orders/available-products" | ConvertTo-Json -Depth 3
 ```
 
 ---
@@ -493,4 +759,3 @@ kubectl scale deployment product-service --replicas=3 -n microservices
 - [Kubernetes in Docker Desktop](https://docs.docker.com/desktop/features/kubernetes/)
 - [Kind — Kubernetes in Docker](https://kind.sigs.k8s.io/)
 - [Podman Desktop](https://podman-desktop.io/)
-

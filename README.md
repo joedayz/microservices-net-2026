@@ -59,6 +59,7 @@ microservices-net-2025/
 - Azure CLI
 - Terraform
 - kubectl
+- Kind *(solo para Módulo 12 con Podman — `brew install kind`)*
 - istioctl
 - JetBrains Rider (recomendado) o Visual Studio Code / Visual Studio
 
@@ -155,30 +156,136 @@ podman --version
 
 ### 🔧 Configuración Inicial
 
+#### 1. Servicios de infraestructura local (docker-compose)
+
+Levanta PostgreSQL, Redis y RabbitMQ para desarrollo:
+
+**Docker:**
 ```bash
-# Clonar el repositorio
-git clone <repo-url>
-cd microservices-net-2025
+# Desde la raíz del proyecto
+docker compose up -d
 
-# Iniciar servicios de infraestructura (PostgreSQL, Redis, MongoDB)
-# Con Docker:
-docker-compose up -d
+# Verificar
+docker ps
 
-# Con Podman:
+# Ver logs
+docker compose logs postgres
+docker compose logs redis
+
+# Detener
+docker compose down
+```
+
+**Podman:**
+```bash
+# Desde la raíz del proyecto
 podman compose up -d
 
-# Verificar que los contenedores están corriendo
-docker ps    # o podman ps
+# Verificar
+podman ps
 
-# Restaurar dependencias del ProductService
+# Detener
+podman compose down
+```
+
+#### 2. Ejecutar un servicio en local
+
+```bash
 cd src/Services/ProductService
 dotnet restore
-
-# Ejecutar migraciones y servicio
 dotnet run
 ```
 
-**Nota:** Si usas Podman, consulta [`docs/PODMAN-SETUP.md`](./docs/PODMAN-SETUP.md) para instrucciones específicas.
+Accede a: http://localhost:5001/swagger
+
+---
+
+#### 3. Kubernetes local (Módulo 12)
+
+Para desplegar en Kubernetes local hay dos opciones:
+
+---
+
+**Opción A — Docker Desktop (más simple)**
+
+1. Activa Kubernetes: Docker Desktop → Settings → Kubernetes → Enable Kubernetes → Apply & Restart
+2. Espera a que el indicador esté en verde
+
+```bash
+# Verificar contexto
+kubectl config use-context docker-desktop
+kubectl get nodes
+
+# Build de imágenes
+docker build --platform linux/amd64 -t product-service:latest \
+  -f src/Services/ProductService/Dockerfile src/Services/
+docker build --platform linux/amd64 -t order-service:latest \
+  -f src/Services/OrderService/Dockerfile src/Services/
+docker build --platform linux/amd64 -t gateway:latest \
+  -f src/Gateway/Dockerfile src/Gateway/
+
+# Desplegar (las imágenes ya están disponibles, no hay que cargarlas)
+./infrastructure/kubernetes/deploy.sh
+
+# Acceder (usar script unificado)
+./infrastructure/kubernetes/port-forward-all.sh
+
+# En otra terminal
+curl http://localhost:5010/health
+```
+
+---
+
+**Opción B — Podman + Kind**
+
+> Ver guía completa en [`docs/PODMAN-SETUP.md`](./docs/PODMAN-SETUP.md)
+
+```bash
+# Prerrequisitos
+brew install kind          # macOS
+
+# 1. Crear cluster (SIEMPRE con KIND_EXPERIMENTAL_PROVIDER=podman)
+KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name microservices
+
+# 2. Exportar kubeconfig (CRÍTICO — evita el error "connection refused")
+KIND_EXPERIMENTAL_PROVIDER=podman kind export kubeconfig --name microservices
+kubectl config use-context kind-microservices
+kubectl get nodes
+
+# 3. Build con prefijo localhost/ (Podman lo requiere)
+podman build --platform linux/amd64 -t localhost/product-service:latest \
+  -f src/Services/ProductService/Dockerfile src/Services/
+podman build --platform linux/amd64 -t localhost/order-service:latest \
+  -f src/Services/OrderService/Dockerfile src/Services/
+podman build --platform linux/amd64 -t localhost/gateway:latest \
+  -f src/Gateway/Dockerfile src/Gateway/
+
+# 4. Cargar imágenes en Kind (export tar + load archive)
+podman save -o /tmp/product-service-latest.tar localhost/product-service:latest
+podman save -o /tmp/order-service-latest.tar localhost/order-service:latest
+podman save -o /tmp/gateway-latest.tar localhost/gateway:latest
+
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/product-service-latest.tar --name microservices
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/order-service-latest.tar --name microservices
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/gateway-latest.tar --name microservices
+
+# 5. Desplegar (prefijo localhost/ OBLIGATORIO)
+LOCAL_IMAGE_PREFIX=localhost/ ./infrastructure/kubernetes/deploy.sh
+
+# 6. Acceder (usar script unificado)
+./infrastructure/kubernetes/port-forward-all.sh
+
+# En otra terminal
+curl http://localhost:5010/health
+```
+
+> **Empezar desde cero (limpiar cluster existente):**
+> ```bash
+> KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name microservices
+> # Luego repetir los pasos del 1 al 6
+> ```
+
+---
 
 ### 🚀 Estado del Proyecto
 

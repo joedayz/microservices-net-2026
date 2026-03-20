@@ -67,6 +67,7 @@ Esta guía proporciona instrucciones detalladas paso a paso para cada módulo de
     - Kubernetes
     - Despliegue en AKS
     - Services y Ingress
+    - > **Prerrequisito local:** Si usas Podman, instala Kind (`brew install kind`) y sigue **[PODMAN-SETUP.md → Kubernetes con Kind](./PODMAN-SETUP.md#2-kubernetes-local-con-podman--kind)** antes de empezar el laboratorio.
 
 13. **[Módulo 13: Docker y ACR](./MODULO-13-Docker-ACR.md)** 📝
     - Dockerfile
@@ -109,7 +110,8 @@ Esta guía proporciona instrucciones detalladas paso a paso para cada módulo de
 
 - **Orden de módulos**: Se recomienda seguir el orden secuencial
 - **Prerequisitos**: Cada módulo asume que los anteriores están completos
-- **Docker**: Asegúrate de tener Docker Desktop corriendo para módulos que lo requieren
+- **Docker / Podman**: Asegúrate de tener Docker Desktop o Podman corriendo para módulos que lo requieren
+- **Podman + Kubernetes (Módulo 12)**: Requiere Kind instalado. Usa siempre `LOCAL_IMAGE_PREFIX=localhost/` y `kind export kubeconfig` después de crear el cluster. Ver [`PODMAN-SETUP.md`](./PODMAN-SETUP.md)
 - **Azure**: Necesitarás una cuenta de Azure para módulos 6-16
 - **Variables de entorno**: Algunos módulos requieren configuración específica
 
