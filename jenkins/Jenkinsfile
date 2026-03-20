@@ -1,0 +1,120 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    ACR_NAME = 'myacrjoedayzregistry'
+    AKS_RESOURCE_GROUP = 'rg-microservices'
+    AKS_CLUSTER_NAME = 'aks-microservices'
+    REGISTRY = "${ACR_NAME}.azurecr.io"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Restore') {
+      steps {
+        sh '''
+          dotnet restore src/Services/ProductService/ProductService.csproj
+          dotnet restore src/Services/OrderService/OrderService.csproj
+          dotnet restore src/Gateway/Gateway.csproj
+        '''
+      }
+    }
+
+    stage('Build') {
+      steps {
+        sh '''
+          dotnet build src/Services/ProductService/ProductService.csproj -c Release --no-restore
+          dotnet build src/Services/OrderService/OrderService.csproj -c Release --no-restore
+          dotnet build src/Gateway/Gateway.csproj -c Release --no-restore
+        '''
+      }
+    }
+
+    stage('Test (if exists)') {
+      steps {
+        sh '''
+          set -e
+          TEST_PROJECTS=$(find . -type f \( -name "*Tests*.csproj" -o -name "*.Tests.csproj" \) || true)
+          if [ -z "$TEST_PROJECTS" ]; then
+            echo "No test projects found. Skipping tests."
+            exit 0
+          fi
+          for p in $TEST_PROJECTS; do
+            dotnet test "$p" -c Release --no-build --verbosity normal
+          done
+        '''
+      }
+    }
+
+    stage('Azure Login + ACR Login') {
+      steps {
+        withCredentials([
+          usernamePassword(credentialsId: 'azure-sp', usernameVariable: 'AZURE_CLIENT_ID', passwordVariable: 'AZURE_CLIENT_SECRET'),
+          string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'),
+          string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')
+        ]) {
+          sh '''
+            az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"
+            az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+            az acr login --name "$ACR_NAME"
+          '''
+        }
+      }
+    }
+
+    stage('Build and Push Images') {
+      steps {
+        sh '''
+          set -e
+          TAG_SHA=$(git rev-parse --short=12 HEAD)
+
+          docker build --platform linux/amd64 -t "$REGISTRY/product-service:latest" -t "$REGISTRY/product-service:$TAG_SHA" -f src/Services/ProductService/Dockerfile src/Services/
+          docker build --platform linux/amd64 -t "$REGISTRY/order-service:latest" -t "$REGISTRY/order-service:$TAG_SHA" -f src/Services/OrderService/Dockerfile src/Services/
+          docker build --platform linux/amd64 -t "$REGISTRY/gateway:latest" -t "$REGISTRY/gateway:$TAG_SHA" -f src/Gateway/Dockerfile src/Gateway/
+
+          docker push "$REGISTRY/product-service:latest"
+          docker push "$REGISTRY/product-service:$TAG_SHA"
+          docker push "$REGISTRY/order-service:latest"
+          docker push "$REGISTRY/order-service:$TAG_SHA"
+          docker push "$REGISTRY/gateway:latest"
+          docker push "$REGISTRY/gateway:$TAG_SHA"
+        '''
+      }
+    }
+
+    stage('Deploy to AKS') {
+      when {
+        allOf {
+          branch 'main'
+          not { changeRequest() }
+        }
+      }
+      steps {
+        sh '''
+          az aks get-credentials --resource-group "$AKS_RESOURCE_GROUP" --name "$AKS_CLUSTER_NAME" --overwrite-existing
+          chmod +x infrastructure/kubernetes/deploy.sh
+          ./infrastructure/kubernetes/deploy.sh "$ACR_NAME"
+          kubectl get pods -n microservices
+          kubectl get svc gateway -n microservices
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      echo 'Pipeline finished.'
+    }
+  }
+}
+

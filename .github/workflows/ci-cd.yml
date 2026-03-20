@@ -1,0 +1,146 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to AKS after push"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: |
+          dotnet restore src/Services/ProductService/ProductService.csproj
+          dotnet restore src/Services/OrderService/OrderService.csproj
+          dotnet restore src/Gateway/Gateway.csproj
+
+      - name: Build
+        run: |
+          dotnet build src/Services/ProductService/ProductService.csproj -c Release --no-restore
+          dotnet build src/Services/OrderService/OrderService.csproj -c Release --no-restore
+          dotnet build src/Gateway/Gateway.csproj -c Release --no-restore
+
+      - name: Test (if test projects exist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t test_projects < <(find . -type f \( -name "*Tests*.csproj" -o -name "*.Tests.csproj" \))
+          if [ ${#test_projects[@]} -eq 0 ]; then
+            echo "No test projects found. Skipping tests."
+            exit 0
+          fi
+          for project in "${test_projects[@]}"; do
+            dotnet test "$project" -c Release --no-build --verbosity normal
+          done
+
+  containerize-and-push:
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: github.event_name != 'pull_request'
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ACR_NAME
+        shell: bash
+        run: |
+          if [ -z "${ACR_NAME}" ]; then
+            echo "ACR_NAME variable is required (Repository/Organization variable)."
+            exit 1
+          fi
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: ACR Login
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Build and Push Images
+        shell: bash
+        run: |
+          set -euo pipefail
+          REGISTRY="${ACR_NAME}.azurecr.io"
+          TAG_SHA="${GITHUB_SHA}"
+
+          docker build --platform linux/amd64 -t "$REGISTRY/product-service:latest" -t "$REGISTRY/product-service:$TAG_SHA" -f src/Services/ProductService/Dockerfile src/Services/
+          docker build --platform linux/amd64 -t "$REGISTRY/order-service:latest" -t "$REGISTRY/order-service:$TAG_SHA" -f src/Services/OrderService/Dockerfile src/Services/
+          docker build --platform linux/amd64 -t "$REGISTRY/gateway:latest" -t "$REGISTRY/gateway:$TAG_SHA" -f src/Gateway/Dockerfile src/Gateway/
+
+          docker push "$REGISTRY/product-service:latest"
+          docker push "$REGISTRY/product-service:$TAG_SHA"
+          docker push "$REGISTRY/order-service:latest"
+          docker push "$REGISTRY/order-service:$TAG_SHA"
+          docker push "$REGISTRY/gateway:latest"
+          docker push "$REGISTRY/gateway:$TAG_SHA"
+
+  deploy-aks:
+    runs-on: ubuntu-latest
+    needs: containerize-and-push
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true')
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
+      AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate AKS variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${ACR_NAME}" ] || (echo "ACR_NAME is required" && exit 1)
+          [ -n "${AKS_RESOURCE_GROUP}" ] || (echo "AKS_RESOURCE_GROUP is required" && exit 1)
+          [ -n "${AKS_CLUSTER_NAME}" ] || (echo "AKS_CLUSTER_NAME is required" && exit 1)
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        run: az aks get-credentials --resource-group "$AKS_RESOURCE_GROUP" --name "$AKS_CLUSTER_NAME" --overwrite-existing
+
+      - name: Deploy to AKS
+        shell: bash
+        run: |
+          chmod +x infrastructure/kubernetes/deploy.sh
+          ./infrastructure/kubernetes/deploy.sh "$ACR_NAME"
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n microservices
+          kubectl get svc gateway -n microservices
+

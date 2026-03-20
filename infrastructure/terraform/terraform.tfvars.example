@@ -1,0 +1,19 @@
+subscription_id          = "00000000-0000-0000-0000-000000000000"
+location                 = "eastus"
+resource_group_name      = "rg-microservices"
+
+# Must be globally unique in Azure
+acr_name                 = "myacrjoedayzregistry"
+servicebus_namespace_name = "sb-microservices-joedayz"
+
+aks_name                 = "aks-microservices"
+aks_dns_prefix           = "aks-microservices"
+aks_node_count           = 2
+aks_vm_size              = "Standard_D2s_v3"
+
+tags = {
+  project = "microservices-net-2025"
+  owner   = "joedayz"
+  env     = "dev"
+}
+
