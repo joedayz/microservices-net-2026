@@ -69,7 +69,7 @@ Kubernetes usa probes para saber si un pod está saludable:
 ## 🧪 Laboratorio 12
 
 ### Objetivo
-Desplegar los microservicios en Kubernetes (AKS o local con minikube/kind):
+1. Desplegar los microservicios en Kubernetes (AKS o local con Docker Desktop/Podman):
 1. Crear manifiestos para infraestructura (PostgreSQL, Redis, RabbitMQ)
 2. Crear manifiestos para los 3 microservicios
 3. Configurar Ingress para routing
@@ -269,7 +269,7 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/cont
 # Despliegue completo con ACR
 ./infrastructure/kubernetes/deploy.sh myacrregistry
 
-# Despliegue local (sin ACR, para minikube/kind)
+# Despliegue local (sin ACR, para Docker Desktop o Kind)
 ./infrastructure/kubernetes/deploy.sh
 ```
 
@@ -287,7 +287,33 @@ El script:
 ### Opción A — AKS (Azure)
 
 ```bash
-# 1. Crear cluster AKS
+# 1. Crear Resource Group (si no existe)
+az group create --name rg-microservices --location eastus
+
+# 2. Crear Azure Container Registry (ACR)
+az acr create \
+  --resource-group rg-microservices \
+  --name myacrregistry \
+  --sku Basic
+
+# 3. Iniciar sesión en el ACR
+az acr login --name myacrregistry
+
+# 4. Build y push de imágenes al ACR
+# Nota: --platform linux/amd64 genera imágenes para clusters AKS (amd64).
+# Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
+docker build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:latest \
+  -f src/Services/ProductService/Dockerfile src/Services/
+docker build --platform linux/amd64 -t myacrregistry.azurecr.io/order-service:latest \
+  -f src/Services/OrderService/Dockerfile src/Services/
+docker build --platform linux/amd64 -t myacrregistry.azurecr.io/gateway:latest \
+  -f src/Gateway/Dockerfile src/Gateway/
+
+docker push myacrregistry.azurecr.io/product-service:latest
+docker push myacrregistry.azurecr.io/order-service:latest
+docker push myacrregistry.azurecr.io/gateway:latest
+
+# 5. Crear cluster AKS (vinculado al ACR)
 az aks create \
   --resource-group rg-microservices \
   --name aks-microservices \
@@ -296,50 +322,106 @@ az aks create \
   --attach-acr myacrregistry \
   --generate-ssh-keys
 
-# 2. Obtener credenciales
+# 6. Obtener credenciales de kubectl
 az aks get-credentials --resource-group rg-microservices --name aks-microservices
 
-# 3. Verificar conexión
+# 7. Verificar conexión
 kubectl get nodes
 
-# 4. Desplegar (con imágenes del ACR)
+# 8. Desplegar (con imágenes del ACR)
 ./infrastructure/kubernetes/deploy.sh myacrregistry
 
-# 5. Obtener IP externa del Gateway
-kubectl get svc gateway -n microservices
+# 9. Obtener IP externa del Gateway (puede tardar 1-2 minutos)
+kubectl get svc gateway -n microservices -w
 # EXTERNAL-IP: 20.xxx.xxx.xxx
 
-# 6. Probar
+# 10. Probar
 curl http://20.xxx.xxx.xxx/api/v1/Products | jq
 curl http://20.xxx.xxx.xxx/health | jq
 ```
 
-### Opción B — Local con minikube
+> **Nota:** El nombre del ACR (`myacrregistry`) debe ser único globalmente en Azure. Cámbialo por uno propio si ya está tomado (ej: `myname2025acr`). El flag `--attach-acr` en el paso 5 permite que AKS haga pull de imágenes desde el ACR sin configuración adicional.
+
+### Opción B — Local con Docker Desktop (Kubernetes integrado)
 
 ```bash
-# 1. Iniciar minikube
-minikube start --memory=4096 --cpus=2
+# 1. Activar Kubernetes en Docker Desktop:
+#    Docker Desktop → Settings → Kubernetes → Enable Kubernetes → Apply & Restart
+#    Esperar a que el indicador de Kubernetes esté en verde (esquina inferior izquierda)
 
-# 2. Usar el Docker daemon de minikube para builds locales
-eval $(minikube docker-env)
+# 2. Verificar que kubectl apunta al cluster local
+kubectl config use-context docker-desktop
+kubectl get nodes
+# NAME             STATUS   ROLES           AGE   VERSION
+# docker-desktop   Ready    control-plane   ...   v1.x.x
 
-# 3. Build de imágenes locales
-docker build -t product-service:latest \
+# 3. Build de imágenes locales (Docker Desktop las hace disponibles en el cluster automáticamente)
+# Nota: --platform linux/amd64 genera imágenes amd64. Opcional si tu cluster K8s es ARM64.
+# Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
+docker build --platform linux/amd64 -t product-service:latest \
   -f src/Services/ProductService/Dockerfile src/Services/
-docker build -t order-service:latest \
+docker build --platform linux/amd64 -t order-service:latest \
   -f src/Services/OrderService/Dockerfile src/Services/
-docker build -t gateway:latest \
+docker build --platform linux/amd64 -t gateway:latest \
   -f src/Gateway/Dockerfile src/Gateway/
 
 # 4. Desplegar (sin ACR = usa imágenes locales)
 ./infrastructure/kubernetes/deploy.sh
 
-# 5. Acceder via minikube
-minikube service gateway -n microservices
-# o port-forward:
+# 5. Acceder al Gateway
 kubectl port-forward svc/gateway 5010:80 -n microservices
 curl http://localhost:5010/health | jq
 ```
+
+> **Nota:** Docker Desktop comparte el daemon con Kubernetes, así que las imágenes construidas con `docker build` están automáticamente disponibles para los pods sin necesidad de un registry externo.
+
+### Opción C — Local con Podman + Kubernetes
+
+Podman Desktop también incluye soporte para Kubernetes (via Podman machine + Kind):
+
+```bash
+# 1. Instalar Podman Desktop (si no lo tienes)
+brew install --cask podman-desktop
+
+# 2. Iniciar Podman machine
+podman machine init --cpus 4 --memory 4096
+podman machine start
+
+# 3. Instalar Kind (Kubernetes in Docker, funciona con Podman)
+brew install kind
+
+# 4. Crear cluster Kind usando Podman como provider
+KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name microservices
+
+# 5. Verificar conexión
+kubectl config use-context kind-microservices
+kubectl get nodes
+
+# 6. Build de imágenes con Podman y cargarlas al cluster Kind
+# Nota: --platform linux/amd64 genera imágenes para clusters amd64.
+# Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
+podman build --platform linux/amd64 -t product-service:latest \
+  -f src/Services/ProductService/Dockerfile src/Services/
+podman build --platform linux/amd64 -t order-service:latest \
+  -f src/Services/OrderService/Dockerfile src/Services/
+podman build --platform linux/amd64 -t gateway:latest \
+  -f src/Gateway/Dockerfile src/Gateway/
+
+# Cargar imágenes al cluster Kind (necesario porque Kind no comparte el daemon)
+# Podman usa prefijo localhost/ en las imágenes locales
+KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/product-service:latest --name microservices
+KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/order-service:latest --name microservices
+KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/gateway:latest --name microservices
+
+# 7. Desplegar
+./infrastructure/kubernetes/deploy.sh
+
+# 8. Acceder al Gateway
+kubectl port-forward svc/gateway 5010:80 -n microservices
+curl http://localhost:5010/health | jq
+```
+
+> **Nota:** Con Kind, las imágenes deben cargarse explícitamente al cluster con `kind load docker-image`. Esto no es necesario con Docker Desktop.
 
 ### Verificar estado del cluster
 
@@ -408,5 +490,7 @@ kubectl scale deployment product-service --replicas=3 -n microservices
 - [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/)
 - [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)
 - [Health Probes in K8s](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
-- [minikube](https://minikube.sigs.k8s.io/docs/start/)
+- [Kubernetes in Docker Desktop](https://docs.docker.com/desktop/features/kubernetes/)
+- [Kind — Kubernetes in Docker](https://kind.sigs.k8s.io/)
+- [Podman Desktop](https://podman-desktop.io/)
 

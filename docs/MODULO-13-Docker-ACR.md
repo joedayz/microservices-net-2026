@@ -227,13 +227,15 @@ az acr create --resource-group rg-microservices \
 az acr login --name myacrregistry
 
 # Build con Docker
-docker build -t myacrregistry.azurecr.io/product-service:v1 \
+# Nota: --platform linux/amd64 genera imágenes para clusters AKS (amd64).
+# Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
+docker build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:v1 \
   -f src/Services/ProductService/Dockerfile src/Services/
 
-docker build -t myacrregistry.azurecr.io/order-service:v1 \
+docker build --platform linux/amd64 -t myacrregistry.azurecr.io/order-service:v1 \
   -f src/Services/OrderService/Dockerfile src/Services/
 
-docker build -t myacrregistry.azurecr.io/gateway:v1 \
+docker build --platform linux/amd64 -t myacrregistry.azurecr.io/gateway:v1 \
   -f src/Gateway/Dockerfile src/Gateway/
 
 # Push
@@ -246,7 +248,7 @@ docker push myacrregistry.azurecr.io/gateway:v1
 ```bash
 podman login myacrregistry.azurecr.io
 
-podman build -t myacrregistry.azurecr.io/product-service:v1 \
+podman build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:v1 \
   -f src/Services/ProductService/Dockerfile src/Services/
 
 podman push myacrregistry.azurecr.io/product-service:v1
@@ -295,7 +297,7 @@ curl -s http://localhost:5003/api/v1/Orders/available-products | jq
 
 ```bash
 # Build solo ProductService
-docker build -t product-service:dev \
+docker build --platform linux/amd64 -t product-service:dev \
   -f src/Services/ProductService/Dockerfile src/Services/
 
 # Correr standalone (necesita PostgreSQL en host)

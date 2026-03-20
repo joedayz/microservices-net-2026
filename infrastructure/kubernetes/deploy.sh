@@ -4,7 +4,7 @@
 # Uso: ./deploy.sh [ACR_NAME]
 #
 # Si se proporciona ACR_NAME, reemplaza los placeholders de imagen.
-# Si no, usa imágenes locales (para desarrollo con kind/minikube).
+# Si no, usa imágenes locales (para desarrollo con Docker Desktop/Kind).
 # ============================================================
 
 set -euo pipefail
