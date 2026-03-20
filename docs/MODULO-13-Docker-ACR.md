@@ -218,45 +218,45 @@ az group create --name rg-microservices --location eastus2
 
 # Crear ACR
 az acr create --resource-group rg-microservices \
-  --name myacrregistry --sku Basic
+  --name myacrjoedayzregistry --sku Basic
 ```
 
 #### b) Build y Push
 ```bash
 # Login al ACR
-az acr login --name myacrregistry
+az acr login --name myacrjoedayzregistry
 
 # Build con Docker
 # Nota: --platform linux/amd64 genera imágenes para clusters AKS (amd64).
 # Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:v1 \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:v1 \
   -f src/Services/ProductService/Dockerfile src/Services/
 
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/order-service:v1 \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/order-service:v1 \
   -f src/Services/OrderService/Dockerfile src/Services/
 
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/gateway:v1 \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/gateway:v1 \
   -f src/Gateway/Dockerfile src/Gateway/
 
 # Push
-docker push myacrregistry.azurecr.io/product-service:v1
-docker push myacrregistry.azurecr.io/order-service:v1
-docker push myacrregistry.azurecr.io/gateway:v1
+docker push myacrjoedayzregistry.azurecr.io/product-service:v1
+docker push myacrjoedayzregistry.azurecr.io/order-service:v1
+docker push myacrjoedayzregistry.azurecr.io/gateway:v1
 ```
 
 #### c) Con Podman (alternativa)
 ```bash
-podman login myacrregistry.azurecr.io
+podman login myacrjoedayzregistry.azurecr.io
 
-podman build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:v1 \
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:v1 \
   -f src/Services/ProductService/Dockerfile src/Services/
 
-podman push myacrregistry.azurecr.io/product-service:v1
+podman push myacrjoedayzregistry.azurecr.io/product-service:v1
 ```
 
 #### d) Build directo en ACR (sin Docker local)
 ```bash
-az acr build --registry myacrregistry \
+az acr build --registry myacrjoedayzregistry \
   --image product-service:v1 \
   --file src/Services/ProductService/Dockerfile src/Services/
 ```

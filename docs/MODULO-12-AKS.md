@@ -268,7 +268,7 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/cont
 
 ```bash
 # Despliegue completo con ACR
-./infrastructure/kubernetes/deploy.sh myacrregistry
+./infrastructure/kubernetes/deploy.sh myacrjoedayzregistry
 
 # Despliegue local (sin ACR, para Docker Desktop o Kind)
 ./infrastructure/kubernetes/deploy.sh
@@ -294,25 +294,45 @@ az group create --name rg-microservices --location eastus
 # 2. Crear Azure Container Registry (ACR)
 az acr create \
   --resource-group rg-microservices \
-  --name myacrregistry \
+  --name myacrjoedayzregistry \
   --sku Basic
 
 # 3. Iniciar sesión en el ACR
-az acr login --name myacrregistry
+az acr login --name myacrjoedayzregistry
 
-# 4. Build y push de imágenes al ACR
+# 4. Build y push de imágenes al ACR (Docker o Podman)
 # Nota: --platform linux/amd64 genera imágenes para clusters AKS (amd64).
 # Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:latest \
+
+# ===== Opción Docker =====
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:latest \
   -f src/Services/ProductService/Dockerfile src/Services/
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/order-service:latest \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/order-service:latest \
   -f src/Services/OrderService/Dockerfile src/Services/
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/gateway:latest \
+docker build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/gateway:latest \
   -f src/Gateway/Dockerfile src/Gateway/
 
-docker push myacrregistry.azurecr.io/product-service:latest
-docker push myacrregistry.azurecr.io/order-service:latest
-docker push myacrregistry.azurecr.io/gateway:latest
+docker push myacrjoedayzregistry.azurecr.io/product-service:latest
+docker push myacrjoedayzregistry.azurecr.io/order-service:latest
+docker push myacrjoedayzregistry.azurecr.io/gateway:latest
+
+# ===== Opción Podman =====
+# Login al ACR con token (evita prompt interactivo de username/password)
+TOKEN=$(az acr login --name myacrjoedayzregistry --expose-token --output tsv --query accessToken)
+echo "$TOKEN" | podman login myacrjoedayzregistry.azurecr.io \
+  -u 00000000-0000-0000-0000-000000000000 \
+  --password-stdin
+
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/product-service:latest \
+  -f src/Services/ProductService/Dockerfile src/Services/
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/order-service:latest \
+  -f src/Services/OrderService/Dockerfile src/Services/
+podman build --platform linux/amd64 -t myacrjoedayzregistry.azurecr.io/gateway:latest \
+  -f src/Gateway/Dockerfile src/Gateway/
+
+podman push myacrjoedayzregistry.azurecr.io/product-service:latest
+podman push myacrjoedayzregistry.azurecr.io/order-service:latest
+podman push myacrjoedayzregistry.azurecr.io/gateway:latest
 
 # 5. Crear cluster AKS (vinculado al ACR)
 az aks create \
@@ -320,7 +340,7 @@ az aks create \
   --name aks-microservices \
   --node-count 2 \
   --enable-managed-identity \
-  --attach-acr myacrregistry \
+  --attach-acr myacrjoedayzregistry \
   --generate-ssh-keys
 
 # 6. Obtener credenciales de kubectl
@@ -330,7 +350,7 @@ az aks get-credentials --resource-group rg-microservices --name aks-microservice
 kubectl get nodes
 
 # 8. Desplegar (con imágenes del ACR)
-./infrastructure/kubernetes/deploy.sh myacrregistry
+./infrastructure/kubernetes/deploy.sh myacrjoedayzregistry
 
 # 9. Obtener IP externa del Gateway (puede tardar 1-2 minutos)
 kubectl get svc gateway -n microservices -w
@@ -341,7 +361,64 @@ curl http://20.xxx.xxx.xxx/api/v1/Products | jq
 curl http://20.xxx.xxx.xxx/health | jq
 ```
 
-> **Nota:** El nombre del ACR (`myacrregistry`) debe ser único globalmente en Azure. Cámbialo por uno propio si ya está tomado (ej: `myname2025acr`). El flag `--attach-acr` en el paso 5 permite que AKS haga pull de imágenes desde el ACR sin configuración adicional.
+> **Nota:** El nombre del ACR (`myacrjoedayzregistry`) debe ser único globalmente en Azure. Cámbialo por uno propio si ya está tomado (ej: `myname2025acr`). El flag `--attach-acr` en el paso 5 permite que AKS haga pull de imágenes desde el ACR sin configuración adicional.
+
+#### Links rápidos para probar servicios en AKS
+
+Primero obtén la IP pública del Gateway:
+
+```bash
+AKS_IP=$(kubectl get svc gateway -n microservices -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "$AKS_IP"
+```
+
+Usa estos links (reemplaza `{AKS_IP}` por la IP obtenida):
+
+- Health del Gateway: `http://{AKS_IP}/health`
+- Productos (v1): `http://{AKS_IP}/api/v1/Products`
+- Órdenes (v1): `http://{AKS_IP}/api/v1/Orders`
+- Productos disponibles desde OrderService: `http://{AKS_IP}/api/v1/Orders/available-products`
+- Swagger de ProductService (enrutado por YARP): `http://{AKS_IP}/swagger`
+
+Prueba rápida por terminal:
+
+```bash
+curl -s "http://$AKS_IP/health" | jq
+curl -s "http://$AKS_IP/api/v1/Products" | jq
+curl -s "http://$AKS_IP/api/v1/Orders" | jq
+curl -s "http://$AKS_IP/api/v1/Orders/available-products" | jq
+```
+
+#### Destruir todo lo creado en AKS (cleanup)
+
+> Ejecuta esta sección cuando termines el laboratorio para evitar costos.
+
+Opción 1 — Destruir recursos de Kubernetes y luego AKS/ACR:
+
+```bash
+# 1. Borrar recursos del laboratorio dentro del cluster
+kubectl delete namespace microservices
+
+# 2. Borrar cluster AKS
+az aks delete --resource-group rg-microservices --name aks-microservices --yes --no-wait
+
+# 3. Borrar ACR
+az acr delete --resource-group rg-microservices --name myacrjoedayzregistry --yes
+```
+
+Opción 2 — Destruir TODO el Resource Group (incluye AKS, ACR y cualquier otro recurso):
+
+```bash
+az group delete --name rg-microservices --yes --no-wait
+```
+
+Verificar estado de eliminación:
+
+```bash
+az group show --name rg-microservices -o table
+az aks list -o table
+az acr list -o table
+```
 
 ### Opción B — Local con Docker Desktop (Kubernetes integrado)
 
