@@ -1,9 +1,7 @@
+using Microsoft.EntityFrameworkCore;
 using ProductService.Domain;
 
 namespace ProductService.Infrastructure;
-
-using Microsoft.EntityFrameworkCore;
-using ProductService.Domain;
 
 public class EfProductRepository : IProductRepository
 {

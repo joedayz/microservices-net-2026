@@ -2,10 +2,6 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ProductService.Application.Configuration;
 
-/// <summary>
-/// Configuración general del servicio.
-/// Se mapea desde la sección "ProductService" de appsettings.json.
-/// </summary>
 public class ProductServiceSettings
 {
     public const string SectionName = "ProductService";

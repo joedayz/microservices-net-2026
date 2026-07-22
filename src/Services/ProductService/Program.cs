@@ -1,21 +1,12 @@
-using System.Text;
 using Asp.Versioning;
 using Asp.Versioning.ApiExplorer;
-using Azure.Identity;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi;
 using ProductService;
-using ProductService.Application.Configuration;
 using ProductService.Application.Services;
 using ProductService.Domain;
-using ProductService.Domain.Events;
-using ProductService.Grpc;
 using ProductService.Infrastructure;
 using ProductService.Infrastructure.Cache;
-using ProductService.Infrastructure.Messaging;
+using ProductService.Application.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,10 +24,41 @@ builder.Services.Configure<FeatureFlagSettings>(
     builder.Configuration.GetSection(FeatureFlagSettings.SectionName));
 
 
-// Register Entity Framework
+// API Versioning (del Módulo 3)
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.DefaultApiVersion = new ApiVersion(1, 0);
+        options.AssumeDefaultVersionWhenUnspecified = true;
+        options.ReportApiVersions = true;
+        options.ApiVersionReader = ApiVersionReader.Combine(
+            new UrlSegmentApiVersionReader(),
+            new HeaderApiVersionReader("X-Version"),
+            new QueryStringApiVersionReader("version")
+        );
+    })
+    .AddApiExplorer(options =>
+    {
+        options.GroupNameFormat = "'v'VVV";
+        options.SubstituteApiVersionInUrl = true;
+    });
+
+// Swagger / OpenAPI (del Módulo 3)
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
+
+// Entity Framework Core + PostgreSQL (NUEVO en Módulo 4)
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<ProductDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+// DI - Cambiar InMemoryProductRepository por EfProductRepository
+builder.Services.AddScoped<IProductRepository, EfProductRepository>();
+// builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>(); // Ya no se usa
+
+// Register application services (Scoped porque depende del DbContext que es Scoped)
+builder.Services.AddScoped<IProductService, ProductService.Application.Services.ProductService>();
 
 
 // Register Redis Cache
@@ -57,237 +79,10 @@ else
 }
 
 
-// API Versioning
-builder.Services
-    .AddApiVersioning(options =>
-    {
-        options.DefaultApiVersion = new ApiVersion(1, 0);
-        options.AssumeDefaultVersionWhenUnspecified = true;
-        options.ReportApiVersions = true;
-        options.ApiVersionReader = ApiVersionReader.Combine(
-            new UrlSegmentApiVersionReader(),
-            new HeaderApiVersionReader("X-Version"),
-            new QueryStringApiVersionReader("version")
-        );
-    })
-    .AddApiExplorer(options =>
-    {
-        options.GroupNameFormat = "'v'VVV";
-        options.SubstituteApiVersionInUrl = true;
-    });
-
-// ============================
-// JWT Authentication
-// ============================
-var authProvider = builder.Configuration.GetValue<string>("Auth:Provider") ?? "local";
-
-if (authProvider.Equals("azuread", StringComparison.OrdinalIgnoreCase))
-{
-    // ── Azure AD / Microsoft Entra ID ──
-    var azureAdConfig = builder.Configuration.GetSection("AzureAd");
-
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
-        {
-            // Usar Authority v1 para que la metadata acepte tokens v1 de az cli
-            options.Authority = $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}";
-            options.Audience = azureAdConfig["Audience"];
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                ValidIssuers = new[]
-                {
-                    $"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0",
-                    $"https://sts.windows.net/{azureAdConfig["TenantId"]}/"
-                },
-                ValidAudiences = new[]
-                {
-                    azureAdConfig["Audience"],
-                    azureAdConfig["ClientId"]
-                },
-                RoleClaimType = System.Security.Claims.ClaimTypes.Role
-            };
-            // Diagnóstico: ver por qué falla la autenticación
-            options.Events = new JwtBearerEvents
-            {
-                OnAuthenticationFailed = context =>
-                {
-                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtBearer");
-                    logger.LogError(context.Exception, "JWT Authentication failed: {Message}", context.Exception.Message);
-                    return Task.CompletedTask;
-                },
-                OnTokenValidated = context =>
-                {
-                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtBearer");
-                    var claims = context.Principal?.Claims.Select(c => $"{c.Type}={c.Value}");
-                    logger.LogInformation("JWT Token validated. Claims: {Claims}", string.Join(", ", claims ?? Array.Empty<string>()));
-                    return Task.CompletedTask;
-                },
-                OnChallenge = context =>
-                {
-                    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtBearer");
-                    logger.LogWarning("JWT Challenge: {Error} - {ErrorDescription}", context.Error, context.ErrorDescription);
-                    return Task.CompletedTask;
-                }
-            };
-        });
-}
-else
-{
-    // ── JWT Local (desarrollo/laboratorio) ──
-    var jwtSettings = builder.Configuration.GetSection("Jwt");
-    var secretKey = jwtSettings["Key"] ?? "S3cur3K3y_F0r_D3v3l0pm3nt_Purp0s3s_Only_2025!";
-
-    builder.Services.AddAuthentication(options =>
-    {
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = jwtSettings["Issuer"] ?? "microservices-net-2025",
-            ValidAudience = jwtSettings["Audience"] ?? "microservices-api",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-            ClockSkew = TimeSpan.Zero
-        };
-    });
-}
-
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
-    options.AddPolicy("ReadOnly", policy => policy.RequireRole("Admin", "Reader"));
-});
-
-// Swagger / OpenAPI (versioned)
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(options =>
-{
-    // Configurar JWT en Swagger UI
-    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Name = "Authorization",
-        Type = SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT",
-        In = ParameterLocation.Header,
-        Description = "Ingrese el token JWT. Ejemplo: eyJhbGciOi..."
-    });
-
-    options.AddSecurityRequirement(_ => new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecuritySchemeReference("Bearer"),
-            new List<string>()
-        }
-    });
-});
-builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
-
-// RabbitMQ options (ConnectionString from ConnectionStrings:RabbitMq)
-builder.Services.AddOptions<RabbitMqOptions>()
-    .Configure<IConfiguration>((opts, config) =>
-    {
-        config.GetSection(RabbitMqOptions.SectionName).Bind(opts);
-        opts.ConnectionString = config.GetConnectionString("RabbitMq") ?? opts.ConnectionString;
-    });
-
-var messagingProvider = builder.Configuration.GetValue<string>("Messaging:Provider") ?? "log";
-if (messagingProvider.Equals("rabbitmq", StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddSingleton<IEventPublisher, RabbitMqEventPublisher>();
-    builder.Services.AddHostedService<ProductEventConsumer>();
-}
-else
-{
-    builder.Services.AddSingleton<IEventPublisher, LogEventPublisher>();
-}
-
-// gRPC
-builder.Services.AddGrpc();
-builder.Services.AddGrpcReflection();
-
-// Kestrel: REST en 5001, gRPC en 5002
-// ListenAnyIP para que funcione dentro de contenedores Docker
-builder.WebHost.ConfigureKestrel(options =>
-{
-    options.ListenAnyIP(5001, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
-    options.ListenAnyIP(5002, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
-});
-
-// DI
-builder.Services.AddScoped<IProductRepository, EfProductRepository>();
-builder.Services.AddScoped<IProductService, ProductService.Application.Services.ProductService>();
-
-// ============================
-// Health Checks
-// ============================
-var healthChecksBuilder = builder.Services.AddHealthChecks();
-
-if (!string.IsNullOrEmpty(connectionString))
-{
-    healthChecksBuilder.AddNpgSql(
-        connectionString,
-        name: "postgresql",
-        tags: new[] { "db", "dependency" });
-}
-
-if (!string.IsNullOrEmpty(redisConnection))
-{
-    healthChecksBuilder.AddRedis(
-        redisConnection,
-        name: "redis",
-        tags: new[] { "cache", "dependency" });
-}
-
-// Agregar Azure App Configuration (ANTES de builder.Build())
-// Usar AppConfig:Enabled=false en Development para evitar bloqueos si Azure es lento
-var appConfigEnabled = builder.Configuration.GetValue<bool>("AppConfig:Enabled", true);
-if (appConfigEnabled && !string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
-{
-    builder.Services.AddAzureAppConfiguration();
-    builder.Configuration.AddAzureAppConfiguration(options =>
-    {
-        var endpoint = builder.Configuration["AppConfig:Endpoint"]!;
-        var credential = new DefaultAzureCredential();
-
-        options.Connect(new Uri(endpoint), credential)
-            .Select("ProductService:*")         // Configuración del servicio
-            .Select("Cache:*")                  // Configuración de cache
-            .Select("FeatureFlags:*")           // Feature flags
-            .ConfigureKeyVault(kv =>
-            {
-                kv.SetCredential(credential);   // Para resolver referencias a Key Vault
-            })
-            .ConfigureRefresh(refresh =>
-            {
-                refresh.Register("ProductService:Sentinel", refreshAll: true)
-                    .SetRefreshInterval(TimeSpan.FromSeconds(30));
-            });
-    }, optional: true);  // Si Azure falla (403, timeout), la app arranca con config local
-}
 
 var app = builder.Build();
 
-// Middleware para refresh automático de App Configuration
-if (appConfigEnabled && !string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
-{
-    app.UseAzureAppConfiguration();
-}
-
-// =========================
 // HTTP pipeline
-// =========================
-
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -308,46 +103,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapGrpcService<ProductGrpcService>();
-app.MapGrpcReflectionService();
 
-// ============================
-// Health Check Endpoints
-// ============================
-app.MapHealthChecks("/health", new HealthCheckOptions
-{
-    Predicate = _ => true,
-    ResponseWriter = async (context, report) =>
-    {
-        context.Response.ContentType = "application/json";
-        var result = new
-        {
-            status = report.Status.ToString(),
-            checks = report.Entries.Select(e => new
-            {
-                name = e.Key,
-                status = e.Value.Status.ToString(),
-                description = e.Value.Description,
-                duration = e.Value.Duration.TotalMilliseconds + "ms"
-            }),
-            totalDuration = report.TotalDuration.TotalMilliseconds + "ms"
-        };
-        await context.Response.WriteAsJsonAsync(result);
-    }
-});
-
-app.MapHealthChecks("/health/live", new HealthCheckOptions
-{
-    Predicate = _ => false  // Liveness: solo verifica que el proceso responde
-});
-
-// =========================
-// Seed inicial
-// =========================
-
+// Ensure database is created and migrate
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ProductDbContext>();
@@ -359,15 +118,14 @@ using (var scope = app.Services.CreateScope())
     if (!dbContext.Products.Any())
     {
         var repository = scope.ServiceProvider.GetRequiredService<IProductRepository>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogInformation("Seeding initial data...");
         await SeedDataAsync(repository);
+        logger.LogInformation("Seed data completed successfully");
     }
 }
 
 app.Run();
-
-// =========================
-// Seed method
-// =========================
 
 static async Task SeedDataAsync(IProductRepository repository)
 {

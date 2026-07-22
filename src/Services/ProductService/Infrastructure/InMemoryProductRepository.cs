@@ -2,9 +2,9 @@ using ProductService.Domain;
 
 namespace ProductService.Infrastructure;
 
-public class InMemoryProductRepository: IProductRepository
-{
 
+public class InMemoryProductRepository : IProductRepository
+{
     private readonly Dictionary<Guid, Product> _products = new();
 
     public Task<Product?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -23,11 +23,11 @@ public class InMemoryProductRepository: IProductRepository
         _products[product.Id] = product;
         return Task.FromResult(product);
     }
-    public Task<bool> UpdateAsync(Product product, CancellationToken cancellationToken = default)
+
+    public Task<bool> UpdateAsync(Product product, CancellationToken cancellationToken)
     {
         if (!_products.ContainsKey(product.Id))
             return Task.FromResult(false);
-
         _products[product.Id] = product;
         return Task.FromResult(true);
     }

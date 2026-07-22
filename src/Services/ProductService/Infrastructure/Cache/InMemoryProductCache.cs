@@ -3,9 +3,8 @@ using ProductService.Application.DTOs;
 
 namespace ProductService.Infrastructure.Cache;
 
-public class InMemoryProductCache:  IProductCache
+public class InMemoryProductCache: IProductCache
 {
-
 
     private readonly IMemoryCache _cache;
     private readonly ILogger<InMemoryProductCache> _logger;

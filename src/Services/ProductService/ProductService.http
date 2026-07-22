@@ -1,6 +1,21 @@
-@ProductService_HostAddress = http://localhost:5031
+@ProductService_HostAddress = http://localhost:5001
 
-GET {{ProductService_HostAddress}}/weatherforecast/
+GET {{ProductService_HostAddress}}/api/products
 Accept: application/json
 
 ###
+
+GET {{ProductService_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+###
+
+POST {{ProductService_HostAddress}}/api/products
+Content-Type: application/json
+
+{
+  "name": "Monitor",
+  "description": "27-inch 4K monitor",
+  "price": 399.99,
+  "stock": 15
+}

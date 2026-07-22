@@ -1,5 +1,4 @@
 using Asp.Versioning;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ProductService.Application.Configuration;
@@ -9,13 +8,14 @@ namespace ProductService.Controllers.V1;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
-[Authorize(Policy = "AdminOnly")]
-public class ConfigController: ControllerBase
+public class ConfigController : ControllerBase
 {
+
     private readonly IOptionsSnapshot<ProductServiceSettings> _serviceSettings;
     private readonly IOptionsSnapshot<CacheSettings> _cacheSettings;
     private readonly IOptionsSnapshot<FeatureFlagSettings> _featureFlags;
     private readonly IWebHostEnvironment _environment;
+
 
     public ConfigController(
         IOptionsSnapshot<ProductServiceSettings> serviceSettings,
@@ -50,7 +50,6 @@ public class ConfigController: ControllerBase
             FeatureFlags = _featureFlags.Value
         });
     }
-
     /// <summary>
     /// Obtener feature flags activos.
     /// </summary>
@@ -60,4 +59,6 @@ public class ConfigController: ControllerBase
     {
         return Ok(_featureFlags.Value);
     }
+
+
 }

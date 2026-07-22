@@ -1,9 +1,5 @@
 namespace ProductService.Application.Configuration;
 
-/// <summary>
-/// Configuración de cache.
-/// Se mapea desde la sección "Cache" de appsettings.json.
-/// </summary>
 public class CacheSettings
 {
     public const string SectionName = "Cache";

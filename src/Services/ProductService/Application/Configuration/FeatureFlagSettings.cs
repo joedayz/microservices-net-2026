@@ -1,9 +1,5 @@
 namespace ProductService.Application.Configuration;
 
-/// <summary>
-/// Feature flags del servicio.
-/// Se mapea desde la sección "FeatureFlags" de appsettings.json.
-/// </summary>
 public class FeatureFlagSettings
 {
     public const string SectionName = "FeatureFlags";
@@ -16,5 +12,4 @@ public class FeatureFlagSettings
 
     /// <summary>Habilitar logging detallado de cache hits/misses</summary>
     public bool EnableCacheLogging { get; set; } = true;
-
 }

@@ -6,9 +6,8 @@ using ProductService.Application.DTOs;
 
 namespace ProductService.Infrastructure.Cache;
 
-public class RedisProductCache: IProductCache
+public class RedisProductCache : IProductCache
 {
-
     private readonly IDistributedCache _cache;
     private readonly ILogger<RedisProductCache> _logger;
     private readonly CacheSettings _cacheSettings;
@@ -43,7 +42,6 @@ public class RedisProductCache: IProductCache
     };
 
 
-
     public async Task<ProductDto?> GetAsync(Guid id, CancellationToken cancellationToken = default)
     {
         if (!_cacheSettings.Enabled) return null;
@@ -56,7 +54,6 @@ public class RedisProductCache: IProductCache
                 _logger.LogDebug("Cache MISS for product {ProductId}", id);
             return null;
         }
-
 
         if (_featureFlags.EnableCacheLogging)
             _logger.LogDebug("Cache HIT for product {ProductId}", id);
@@ -79,7 +76,6 @@ public class RedisProductCache: IProductCache
 
         if (_featureFlags.EnableCacheLogging)
             _logger.LogDebug("Cache HIT for all products");
-
 
         return JsonSerializer.Deserialize<IEnumerable<ProductDto>>(cached, JsonOptions);
     }
