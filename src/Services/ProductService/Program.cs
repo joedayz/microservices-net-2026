@@ -7,8 +7,41 @@ using ProductService.Domain;
 using ProductService.Infrastructure;
 using ProductService.Infrastructure.Cache;
 using ProductService.Application.Configuration;
+using Azure.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+{
+    builder.Configuration.AddAzureAppConfiguration(options =>
+    {
+        var endpoint = builder.Configuration["AppConfig:Endpoint"];
+        // En local, DefaultAzureCredential puede colgarse intentando Managed Identity (IMDS).
+        // Preferir Azure CLI tras `az login`.
+        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        {
+            ExcludeManagedIdentityCredential = true,
+            ExcludeVisualStudioCredential = true,
+            ExcludeAzurePowerShellCredential = true,
+            ExcludeInteractiveBrowserCredential = true
+        });
+
+        options.Connect(new Uri(endpoint), credential)
+            .Select("ProductService:*")         // Configuración del servicio
+            .Select("Cache:*")                  // Configuración de cache
+            .Select("FeatureFlags:*")           // Feature flags
+            .ConfigureKeyVault(kv =>
+            {
+                kv.SetCredential(credential);   // Para resolver referencias a Key Vault
+            })
+            .ConfigureRefresh(refresh =>
+            {
+                refresh.Register("ProductService:Sentinel", refreshAll: true)
+                    .SetRefreshInterval(TimeSpan.FromSeconds(30));
+            });
+    });
+    builder.Services.AddAzureAppConfiguration();
+}
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -61,6 +94,7 @@ builder.Services.AddScoped<IProductRepository, EfProductRepository>();
 builder.Services.AddScoped<IProductService, ProductService.Application.Services.ProductService>();
 
 
+
 // Register Redis Cache
 var redisConnection = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrEmpty(redisConnection))
@@ -81,6 +115,12 @@ else
 
 
 var app = builder.Build();
+
+if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+{
+    app.UseAzureAppConfiguration();  // Middleware para refresh automático
+}
+
 
 // HTTP pipeline
 if (app.Environment.IsDevelopment())

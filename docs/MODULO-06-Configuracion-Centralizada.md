@@ -901,11 +901,23 @@ az group create --name rg-microservices --location eastus
 # Crear App Configuration
 az appconfig create --name appconfig-microservices --resource-group rg-microservices --location eastus --sku Free
 
-# Crear Key Vault
-az keyvault create --name kv-microservices-$RANDOM --resource-group rg-microservices --location eastus
+# Crear Key Vault (guardar el nombre: los vaults nuevos usan Azure RBAC por defecto)
+KV_NAME="kv-microservices-$RANDOM"
+az keyvault create --name $KV_NAME --resource-group rg-microservices --location eastus
+echo "Key Vault creado: $KV_NAME"
+
+# Asignar rol RBAC para poder crear/leer secretos (obligatorio con el modelo RBAC)
+# Sin esto, `az keyvault secret set` falla con ForbiddenByRbac
+az role assignment create \
+  --role "Key Vault Secrets Officer" \
+  --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --scope "$(az keyvault show --name $KV_NAME --resource-group rg-microservices --query id -o tsv)"
+
+# Esperar propagación de RBAC (1–5 minutos). Si secret set falla, reintentar.
+sleep 60
 
 # Guardar connection string de PostgreSQL como secreto en Key Vault
-az keyvault secret set --vault-name kv-microservices-[$RANDOM] --name "ConnectionStrings--DefaultConnection" --value "Host=prod-server;Port=5432;Database=prod_db;Username=app;Password=SecureP@ss"
+az keyvault secret set --vault-name $KV_NAME --name "ConnectionStrings--DefaultConnection" --value "Host=prod-server;Port=5432;Database=prod_db;Username=app;Password=SecureP@ss"
 
 # Guardar configuración en App Configuration
 az appconfig kv set --name appconfig-microservices --key "ProductService:ServiceName" --value "ProductService" --yes
@@ -913,8 +925,10 @@ az appconfig kv set --name appconfig-microservices --key "Cache:Enabled" --value
 az appconfig kv set --name appconfig-microservices --key "FeatureFlags:EnableSearchByName" --value "true" --yes
 
 # Crear referencia a Key Vault desde App Configuration
-az appconfig kv set-keyvault --name appconfig-microservices --key "ConnectionStrings:DefaultConnection" --secret-identifier "https://kv-microservices.vault.azure.net/secrets/ConnectionStrings--DefaultConnection" --yes
+az appconfig kv set-keyvault --name appconfig-microservices --key "ConnectionStrings:DefaultConnection" --secret-identifier "https://$KV_NAME.vault.azure.net/secrets/ConnectionStrings--DefaultConnection" --yes
 ```
+
+> **⚠️ Importante:** Los Key Vault creados hoy usan **Azure RBAC** (no Access Policies). Debes asignarte el rol **Key Vault Secrets Officer** antes de ejecutar `az keyvault secret set`. Si recibes `ForbiddenByRbac` / `Assignment: (not found)`, el rol aún no está asignado o no ha propagado.
 
 #### 14.3: Configurar en Program.cs
 
@@ -927,7 +941,15 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
     builder.Configuration.AddAzureAppConfiguration(options =>
     {
         var endpoint = builder.Configuration["AppConfig:Endpoint"];
-        var credential = new DefaultAzureCredential();
+        // En local, DefaultAzureCredential puede colgarse intentando Managed Identity (IMDS).
+        // Preferir Azure CLI tras `az login`.
+        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        {
+            ExcludeManagedIdentityCredential = true,
+            ExcludeVisualStudioCredential = true,
+            ExcludeAzurePowerShellCredential = true,
+            ExcludeInteractiveBrowserCredential = true
+        });
 
         options.Connect(new Uri(endpoint), credential)
             .Select("ProductService:*")         // Configuración del servicio
@@ -943,9 +965,11 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
                     .SetRefreshInterval(TimeSpan.FromSeconds(30));
             });
     });
+    builder.Services.AddAzureAppConfiguration();
 }
 ```
 
+> **⚠️ Si `dotnet run` se queda en "Building..." sin mostrar "Now listening":** suele ser `DefaultAzureCredential` colgado por Managed Identity. Usa las opciones de exclusión de arriba, asegúrate de haber hecho `az login`, y ten el rol **App Configuration Data Reader**.
 #### 14.4: Agregar middleware de refresh
 
 ```csharp
@@ -1089,3 +1113,9 @@ Azure App Configuration (si configurado)
 - Verificar que `DefaultAzureCredential` tiene permisos
 - Verificar el endpoint en `appsettings.json` o variable de entorno
 - Ejecutar `az appconfig kv list --name appconfig-microservices` para verificar valores
+
+**(Opcional) `az keyvault secret set` falla con ForbiddenByRbac**
+- El vault usa Azure RBAC y tu usuario no tiene rol (o aún no propagó)
+- Asignar: `az role assignment create --role "Key Vault Secrets Officer" --assignee "$(az ad signed-in-user show --query id -o tsv)" --scope "$(az keyvault show --name <KV_NAME> --resource-group rg-microservices --query id -o tsv)"`
+- Esperar 1–5 minutos y reintentar `az keyvault secret set`
+- Roles útiles: **Key Vault Secrets Officer** (leer/escribir secretos), **Key Vault Secrets User** (solo lectura)
