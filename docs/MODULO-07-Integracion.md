@@ -596,6 +596,7 @@ dotnet add package Grpc.Tools
 dotnet add package Microsoft.EntityFrameworkCore
 dotnet add package Microsoft.EntityFrameworkCore.Design
 dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
+dotnet add package Swashbuckle.AspNetCore
 ```
 
 > Si todavía no instalaste la herramienta `dotnet-ef` en el Módulo 4, hazlo ahora: `dotnet tool install --global dotnet-ef`.

@@ -935,12 +935,14 @@ az appconfig kv set-keyvault --name appconfig-microservices --key "ConnectionStr
 ```csharp
 using Azure.Identity;
 
-// Agregar Azure App Configuration (después de builder creation)
-if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+// Agregar Azure App Configuration (después de builder creation).
+// En local déjalo desactivado (AppConfig:Enabled=false) y usa appsettings.json.
+var appConfigEnabled = builder.Configuration.GetValue("AppConfig:Enabled", false);
+var appConfigEndpoint = builder.Configuration["AppConfig:Endpoint"];
+if (appConfigEnabled && !string.IsNullOrEmpty(appConfigEndpoint))
 {
     builder.Configuration.AddAzureAppConfiguration(options =>
     {
-        var endpoint = builder.Configuration["AppConfig:Endpoint"];
         // En local, DefaultAzureCredential puede colgarse intentando Managed Identity (IMDS).
         // Preferir Azure CLI tras `az login`.
         var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
@@ -948,10 +950,11 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
             ExcludeManagedIdentityCredential = true,
             ExcludeVisualStudioCredential = true,
             ExcludeAzurePowerShellCredential = true,
-            ExcludeInteractiveBrowserCredential = true
+            ExcludeInteractiveBrowserCredential = true,
+            ExcludeBrokerCredential = true
         });
 
-        options.Connect(new Uri(endpoint), credential)
+        options.Connect(new Uri(appConfigEndpoint), credential)
             .Select("ProductService:*")         // Configuración del servicio
             .Select("Cache:*")                  // Configuración de cache
             .Select("FeatureFlags:*")           // Feature flags
@@ -964,17 +967,27 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
                 refresh.Register("ProductService:Sentinel", refreshAll: true)
                     .SetRefreshInterval(TimeSpan.FromSeconds(30));
             });
-    });
+    }, optional: true);
     builder.Services.AddAzureAppConfiguration();
 }
 ```
+
+En `appsettings.json` (local):
+```json
+"AppConfig": {
+  "Enabled": false,
+  "Endpoint": "https://appconfig-osiptel.azconfig.io"
+}
+```
+
+Para probar App Config en local: `"Enabled": true` + `az login` + rol **App Configuration Data Reader**.
 
 > **⚠️ Si `dotnet run` se queda en "Building..." sin mostrar "Now listening":** suele ser `DefaultAzureCredential` colgado por Managed Identity. Usa las opciones de exclusión de arriba, asegúrate de haber hecho `az login`, y ten el rol **App Configuration Data Reader**.
 #### 14.4: Agregar middleware de refresh
 
 ```csharp
 // Después de var app = builder.Build();
-if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+if (appConfigEnabled && !string.IsNullOrEmpty(appConfigEndpoint))
 {
     app.UseAzureAppConfiguration();  // Middleware para refresh automático
 }
@@ -985,6 +998,7 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
 ```json
 {
   "AppConfig": {
+    "Enabled": false,
     "Endpoint": "https://appconfig-microservices.azconfig.io"
   }
 }

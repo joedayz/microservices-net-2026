@@ -15,11 +15,14 @@ using ProductService.Grpc;
 
 var builder = WebApplication.CreateBuilder(args);
 
-if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+// App Config es opcional en local (usa appsettings.json). Actívalo con AppConfig:Enabled=true
+// y az login / rol App Configuration Data Reader.
+var appConfigEnabled = builder.Configuration.GetValue("AppConfig:Enabled", false);
+var appConfigEndpoint = builder.Configuration["AppConfig:Endpoint"];
+if (appConfigEnabled && !string.IsNullOrEmpty(appConfigEndpoint))
 {
     builder.Configuration.AddAzureAppConfiguration(options =>
     {
-        var endpoint = builder.Configuration["AppConfig:Endpoint"];
         // En local, DefaultAzureCredential puede colgarse intentando Managed Identity (IMDS).
         // Preferir Azure CLI tras `az login`.
         var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
@@ -27,10 +30,11 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
             ExcludeManagedIdentityCredential = true,
             ExcludeVisualStudioCredential = true,
             ExcludeAzurePowerShellCredential = true,
-            ExcludeInteractiveBrowserCredential = true
+            ExcludeInteractiveBrowserCredential = true,
+            ExcludeBrokerCredential = true
         });
 
-        options.Connect(new Uri(endpoint), credential)
+        options.Connect(new Uri(appConfigEndpoint), credential)
             .Select("ProductService:*")         // Configuración del servicio
             .Select("Cache:*")                  // Configuración de cache
             .Select("FeatureFlags:*")           // Feature flags
@@ -43,7 +47,7 @@ if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
                 refresh.Register("ProductService:Sentinel", refreshAll: true)
                     .SetRefreshInterval(TimeSpan.FromSeconds(30));
             });
-    });
+    }, optional: true);
     builder.Services.AddAzureAppConfiguration();
 }
 
@@ -140,7 +144,7 @@ builder.Services.AddGrpcReflection();
 
 var app = builder.Build();
 
-if (!string.IsNullOrEmpty(builder.Configuration["AppConfig:Endpoint"]))
+if (appConfigEnabled && !string.IsNullOrEmpty(appConfigEndpoint))
 {
     app.UseAzureAppConfiguration();  // Middleware para refresh automático
 }
