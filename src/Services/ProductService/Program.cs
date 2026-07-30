@@ -8,6 +8,10 @@ using ProductService.Infrastructure;
 using ProductService.Infrastructure.Cache;
 using ProductService.Application.Configuration;
 using Azure.Identity;
+using ProductService.Domain.Events;
+using ProductService.Infrastructure.Messaging;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using ProductService.Grpc;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -112,7 +116,27 @@ else
     builder.Services.AddScoped<IProductCache, InMemoryProductCache>();
 }
 
+// Domain Events: RabbitMQ o fallback a logging, según configuración (Módulo 7)
+var messagingProvider = builder.Configuration["Messaging:Provider"] ?? "rabbitmq";
+if (messagingProvider == "rabbitmq")
+{
+    builder.Services.AddSingleton<IEventPublisher, RabbitMqEventPublisher>();
+}
+else
+{
+    builder.Services.AddSingleton<IEventPublisher, LogEventPublisher>();
+}
+builder.Services.AddHostedService<ProductEventConsumer>();
 
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenLocalhost(5001, o => o.Protocols = HttpProtocols.Http1);       // REST
+    options.ListenLocalhost(5002, o => o.Protocols = HttpProtocols.Http2);       // gRPC
+});
+
+// gRPC (Módulo 7)
+builder.Services.AddGrpc();
+builder.Services.AddGrpcReflection();
 
 var app = builder.Build();
 
@@ -145,6 +169,8 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
+app.MapGrpcService<ProductGrpcService>();
+app.MapGrpcReflectionService();
 
 // Ensure database is created and migrate
 using (var scope = app.Services.CreateScope())

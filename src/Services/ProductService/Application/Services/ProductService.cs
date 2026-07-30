@@ -1,5 +1,6 @@
 using ProductService.Application.DTOs;
 using ProductService.Domain;
+using ProductService.Domain.Events;
 using ProductService.Infrastructure.Cache;
 
 namespace ProductService.Application.Services;
@@ -9,14 +10,17 @@ public class ProductService : IProductService
     private readonly IProductRepository _repository;
     private readonly IProductCache _cache;
     private readonly ILogger<ProductService> _logger;
+    private readonly IEventPublisher _eventPublisher; 
 
     public ProductService(
         IProductRepository repository,
         IProductCache cache,
+        IEventPublisher eventPublisher,                 // ← NUEVO parámetro
         ILogger<ProductService> logger)
     {
         _repository = repository;
         _cache = cache;
+        _eventPublisher = eventPublisher;
         _logger = logger;
     }
 
@@ -81,6 +85,14 @@ public class ProductService : IProductService
         // Guardar en cache e invalidar lista
         await _cache.SetAsync(createdProduct.Id, result, cancellationToken);
 
+        await _eventPublisher.PublishAsync(new ProductCreatedEvent
+        {
+            ProductId = createdProduct.Id,
+            Name = createdProduct.Name,
+            Price = createdProduct.Price,
+            Stock = createdProduct.Stock
+        }, cancellationToken);
+
         return result;
     }
 
@@ -103,8 +115,15 @@ public class ProductService : IProductService
 
         if (updated)
         {
-            // Invalidar cache
             await _cache.RemoveAsync(id, cancellationToken);
+
+            await _eventPublisher.PublishAsync(new ProductUpdatedEvent
+            {
+                ProductId = product.Id,
+                Name = product.Name,
+                Price = product.Price,
+                Stock = product.Stock
+            }, cancellationToken);
         }
 
         return updated;
@@ -117,8 +136,12 @@ public class ProductService : IProductService
 
         if (deleted)
         {
-            // Invalidar cache
             await _cache.RemoveAsync(id, cancellationToken);
+
+            await _eventPublisher.PublishAsync(new ProductDeletedEvent
+            {
+                ProductId = id
+            }, cancellationToken);
         }
 
         return deleted;

@@ -141,6 +141,8 @@ dotnet add package Grpc.AspNetCore
 dotnet add package Grpc.AspNetCore.Server.Reflection
 ```
 
+> **Nota — RabbitMQ.Client 7.x:** desde la versión 7, la API es totalmente async (`IChannel` en lugar de `IModel`, `CreateConnectionAsync`, `BasicPublishAsync`, `AsyncEventingBasicConsumer`, etc.). Los pasos 5 y 6 usan esa API. Si instalas una 6.x antigua, el código del lab no compilará.
+
 ### Paso 3: Configurar appsettings.json (ProductService)
 
 ```json
@@ -207,7 +209,7 @@ public class ProductCreatedEvent : DomainEvent
 
 ### Paso 5: Implementar RabbitMqEventPublisher y LogEventPublisher
 
-**`Infrastructure/Messaging/RabbitMqEventPublisher.cs`** - Publica eventos a RabbitMQ con exchange tipo `topic` y routing key `domainEvent.EventType`.
+**`Infrastructure/Messaging/RabbitMqEventPublisher.cs`** - Publica eventos a RabbitMQ con exchange tipo `topic` y routing key `domainEvent.EventType` (API async de RabbitMQ.Client 7.x).
 
 ```csharp
 using System.Text;
@@ -217,12 +219,12 @@ using RabbitMQ.Client;
 
 namespace ProductService.Infrastructure.Messaging;
 
-public class RabbitMqEventPublisher : IEventPublisher, IDisposable
+public class RabbitMqEventPublisher : IEventPublisher, IAsyncDisposable
 {
     private readonly string _exchange;
     private readonly string _exchangeType;
     private readonly IConnection _connection;
-    private readonly IModel _channel;
+    private readonly IChannel _channel;
     private readonly ILogger<RabbitMqEventPublisher> _logger;
 
     public RabbitMqEventPublisher(IConfiguration configuration, ILogger<RabbitMqEventPublisher> logger)
@@ -234,32 +236,41 @@ public class RabbitMqEventPublisher : IEventPublisher, IDisposable
         var connectionString = configuration.GetConnectionString("RabbitMq")
             ?? "amqp://guest:guest@localhost:5672";
 
+        // RabbitMQ.Client 7.x es async; el ctor de DI no puede ser async,
+        // así que inicializamos de forma síncrona al arrancar el singleton.
         var factory = new ConnectionFactory { Uri = new Uri(connectionString) };
-        _connection = factory.CreateConnection();
-        _channel = _connection.CreateModel();
-        _channel.ExchangeDeclare(_exchange, _exchangeType, durable: true);
+        _connection = factory.CreateConnectionAsync().GetAwaiter().GetResult();
+        _channel = _connection.CreateChannelAsync().GetAwaiter().GetResult();
+        _channel.ExchangeDeclareAsync(_exchange, _exchangeType, durable: true).GetAwaiter().GetResult();
     }
 
-    public Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default)
+    public async Task PublishAsync<T>(T domainEvent, CancellationToken cancellationToken = default)
         where T : DomainEvent
     {
         var json = JsonSerializer.Serialize(domainEvent, domainEvent.GetType());
         var body = Encoding.UTF8.GetBytes(json);
 
-        var properties = _channel.CreateBasicProperties();
-        properties.Persistent = true;
-        properties.ContentType = "application/json";
+        var properties = new BasicProperties
+        {
+            Persistent = true,
+            ContentType = "application/json"
+        };
 
-        _channel.BasicPublish(_exchange, routingKey: domainEvent.EventType, properties, body);
+        await _channel.BasicPublishAsync(
+            exchange: _exchange,
+            routingKey: domainEvent.EventType,
+            mandatory: false,
+            basicProperties: properties,
+            body: body,
+            cancellationToken: cancellationToken);
 
         _logger.LogInformation("Published event {EventType} ({EventId})", domainEvent.EventType, domainEvent.EventId);
-        return Task.CompletedTask;
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        _channel?.Close();
-        _connection?.Close();
+        await _channel.CloseAsync();
+        await _connection.CloseAsync();
     }
 }
 ```
@@ -357,7 +368,7 @@ if (deleted)
 
 ### Paso 6: Implementar ProductEventConsumer (BackgroundService)
 
-Consumidor que escucha `product.*` en RabbitMQ y procesa los eventos:
+Consumidor que escucha `product.*` en RabbitMQ y procesa los eventos (API async de RabbitMQ.Client 7.x; la lógica va en `ExecuteAsync`):
 
 **`Infrastructure/Messaging/ProductEventConsumer.cs`**
 ```csharp
@@ -372,7 +383,7 @@ public class ProductEventConsumer : BackgroundService
     private readonly IConfiguration _configuration;
     private readonly ILogger<ProductEventConsumer> _logger;
     private IConnection? _connection;
-    private IModel? _channel;
+    private IChannel? _channel;
 
     public ProductEventConsumer(IConfiguration configuration, ILogger<ProductEventConsumer> logger)
     {
@@ -380,7 +391,7 @@ public class ProductEventConsumer : BackgroundService
         _logger = logger;
     }
 
-    public override Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var exchange = _configuration["RabbitMq:Exchange"] ?? "product-events";
         var exchangeType = _configuration["RabbitMq:ExchangeType"] ?? "topic";
@@ -388,32 +399,42 @@ public class ProductEventConsumer : BackgroundService
             ?? "amqp://guest:guest@localhost:5672";
 
         var factory = new ConnectionFactory { Uri = new Uri(connectionString) };
-        _connection = factory.CreateConnection();
-        _channel = _connection.CreateModel();
-        _channel.ExchangeDeclare(exchange, exchangeType, durable: true);
+        _connection = await factory.CreateConnectionAsync(stoppingToken);
+        _channel = await _connection.CreateChannelAsync(cancellationToken: stoppingToken);
+        await _channel.ExchangeDeclareAsync(exchange, exchangeType, durable: true, cancellationToken: stoppingToken);
 
         // Cola exclusiva y auto-eliminable: solo existe mientras corre este servicio
-        var queueName = _channel.QueueDeclare().QueueName;
-        _channel.QueueBind(queueName, exchange, routingKey: "product.*");
+        var queue = await _channel.QueueDeclareAsync(cancellationToken: stoppingToken);
+        await _channel.QueueBindAsync(queue.QueueName, exchange, routingKey: "product.*", cancellationToken: stoppingToken);
 
-        var consumer = new EventingBasicConsumer(_channel);
-        consumer.Received += (_, ea) =>
+        var consumer = new AsyncEventingBasicConsumer(_channel);
+        consumer.ReceivedAsync += async (_, ea) =>
         {
             var body = Encoding.UTF8.GetString(ea.Body.ToArray());
             _logger.LogInformation("Event received [{RoutingKey}]: {Body}", ea.RoutingKey, body);
+            await Task.CompletedTask;
         };
-        _channel.BasicConsume(queueName, autoAck: true, consumer);
+        await _channel.BasicConsumeAsync(queue.QueueName, autoAck: true, consumer, stoppingToken);
 
-        return base.StartAsync(cancellationToken);
+        // Mantener el BackgroundService vivo hasta que se cancele
+        try
+        {
+            await Task.Delay(Timeout.Infinite, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // shutdown normal
+        }
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.CompletedTask;
-
-    public override Task StopAsync(CancellationToken cancellationToken)
+    public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        _channel?.Close();
-        _connection?.Close();
-        return base.StopAsync(cancellationToken);
+        if (_channel is not null)
+            await _channel.CloseAsync(cancellationToken);
+        if (_connection is not null)
+            await _connection.CloseAsync(cancellationToken);
+
+        await base.StopAsync(cancellationToken);
     }
 }
 ```
@@ -1225,6 +1246,8 @@ dotnet user-secrets set "Messaging:Provider" "servicebus"
 ### 🐛 Solución de Problemas
 
 **RabbitMQ eacces en Podman:** Usar `podman run` directo con `--userns=keep-id:uid=999,gid=999`.
+
+**`IModel` could not be found / API 6.x vs 7.x:** Este lab usa **RabbitMQ.Client 7.x** (`IChannel`, métodos `*Async`). Si ves errores de `IModel` o `CreateConnection()`, estás mezclando código de la API 6.x con el paquete 7.x (o al revés). Alinea el código con los Pasos 5–6 del lab.
 
 **grpcurl "server does not support reflection":** Agregar `Grpc.AspNetCore.Server.Reflection`, `AddGrpcReflection()`, `MapGrpcReflectionService()`.
 
