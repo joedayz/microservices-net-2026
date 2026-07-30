@@ -114,6 +114,7 @@ Protección de endpoints:
 │                                                       │
 │  GET  /api/v1/orders          → [AllowAnonymous]     │
 │  GET  /api/v1/orders/{id}     → [Authorize]          │
+│  GET  /api/v1/orders/available-products → [AllowAnonymous] │
 │  POST /api/v1/orders          → [Authorize] AdminOnly│
 │  DEL  /api/v1/orders/{id}     → [Authorize] AdminOnly│
 │                                                       │
@@ -299,10 +300,10 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 ```
 
-Y registrar Authentication + Authorization después de `AddSingleton<IOrderRepository>`:
+Y registrar Authentication + Authorization después de `AddScoped<IOrderRepository>` (Módulo 7):
 
 ```csharp
-builder.Services.AddSingleton<IOrderRepository, InMemoryOrderRepository>();
+builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
 
 // ============================
 // JWT Authentication
@@ -636,17 +637,23 @@ public class ConfigController: ControllerBase
 
 #### OrderService – OrdersController
 
+> **Importante:** este es el mismo `OrdersController` creado en el Módulo 7 (namespace `OrderService.Controllers.V1`, ruta versionada). No crees un controller nuevo en `OrderService.Controllers` — si lo haces, tendrás dos controllers con la misma ruta `api/v1/Orders` y ASP.NET Core lanzará `AmbiguousMatchException` al arrancar.
+
+Editar `Controllers/V1/OrdersController.cs` agregando `using Microsoft.AspNetCore.Authorization;` y los atributos:
+
 ```csharp
+using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using OrderService.Application.DTOs;
 using OrderService.Clients;
 using OrderService.Domain;
-using OrderService.DTOs;
 
-namespace OrderService.Controllers;
+namespace OrderService.Controllers.V1;
 
 [ApiController]
-[Route("api/v1/[controller]")]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/[controller]")]
 [Authorize]                                          // ← Protege TODO el controller
 public class OrdersController : ControllerBase
 {
@@ -658,6 +665,10 @@ public class OrdersController : ControllerBase
 
     [HttpGet("{id}")]                                // ← Requiere autenticación
     public async Task<ActionResult<OrderDto>> GetById(...)
+
+    [HttpGet("available-products")]
+    [AllowAnonymous]                                 // ← Público (lo usan los Módulos 9 y 11 sin token)
+    public async Task<ActionResult<IEnumerable<ProductInfoDto>>> GetAvailableProducts(...)
 
     [HttpPost]
     [Authorize(Policy = "AdminOnly")]                // ← Solo Admin crea órdenes

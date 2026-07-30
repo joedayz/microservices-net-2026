@@ -12,7 +12,7 @@ Un **API Gateway** es el punto de entrada único para las peticiones de los clie
 
 ```
                     ┌─────────────────┐
-  Cliente (Web/App) │   API Gateway   │  puerto 5000
+  Cliente (Web/App) │   API Gateway   │  puerto 5010
                     │   (YARP)        │
                     └────────┬────────┘
                              │
@@ -98,7 +98,7 @@ Puedes seguir una de estas dos opciones (o ambas):
 
 | Opción | Gateway | Cuándo usarla |
 |--------|---------|----------------|
-| **Sección 1** | **YARP** (self-hosted, puerto 5000) | Desarrollo local, sin Azure, coste cero. |
+| **Sección 1** | **YARP** (self-hosted, puerto 5010) | Desarrollo local, sin Azure, coste cero. |
 | **Sección 2** | **Azure API Management (APIM)** | Producción en Azure, portal de desarrolladores, políticas y analytics. |
 
 - Para **usar YARP** → sigue la [Sección 1 – YARP](#-laboratorio-9-opción-1-api-gateway-con-yarp).
@@ -164,7 +164,7 @@ builder.Services.AddReverseProxy()
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenLocalhost(5000, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    options.ListenLocalhost(5010, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
 });
 
 var app = builder.Build();
@@ -270,7 +270,7 @@ dotnet sln add ../../Gateway/Gateway.csproj
    curl http://localhost:5010/api/v1/Orders
    ```
 
-Si los backends responden correctamente cuando se llaman directo (5001 y 5003), y por el gateway (5000) obtienes las mismas respuestas, el módulo está funcionando.
+Si los backends responden correctamente cuando se llaman directo (5001 y 5003), y por el gateway (5010) obtienes las mismas respuestas, el módulo está funcionando.
 
 ### Paso 7 (opcional): Swagger de ProductService por el gateway
 
