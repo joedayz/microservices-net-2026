@@ -626,6 +626,9 @@ public class Order
     public decimal Total => Items.Sum(i => i.UnitPrice * i.Quantity);
     public DateTime CreatedAt { get; set; }
 
+    // Requerido por EF Core: no puede bindear navegaciones (Items) a parámetros de ctor
+    private Order() { }
+
     public Order(string customerName, List<OrderItem> items)
     {
         Id = Guid.NewGuid();
