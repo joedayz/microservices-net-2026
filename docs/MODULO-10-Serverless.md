@@ -41,7 +41,7 @@ Crear una Azure Function que consuma mensajes del topic **product-events** de Se
 
 ---
 
-### Paso 1: Instalar Azure Functions Core Tools
+### Paso 1: Instalar Azure Functions Core Tools + plantillas
 
 **macOS (Homebrew):**
 ```bash
@@ -62,28 +62,38 @@ sudo chmod +x /usr/local/azure-functions/func
 # Añadir al PATH si es necesario
 ```
 
-Comprobar:
+Comprobar Core Tools:
 ```bash
 func --version
 ```
+
+**Plantilla de `dotnet new` (obligatoria si usas `dotnet new func`):**
+```bash
+dotnet new install Microsoft.Azure.Functions.Worker.ProjectTemplates
+dotnet new list func
+```
+
+> Si ves `No templates or subcommands found matching: 'func'`, es porque faltan estas plantillas (tener `func` en el PATH no las instala).
 
 ---
 
 ### Paso 2: Crear el proyecto Azure Functions
 
-En la raíz del repo (o en `src/`):
+En la raíz del repo:
 
 ```bash
 # Linux/macOS
 mkdir -p src/Functions
 cd src/Functions
-dotnet new func --name Functions --template "Isolated worker" -f net8.0
+dotnet new func -n Functions -F net8.0
 
 # Windows (PowerShell)
 New-Item -ItemType Directory -Force -Path src\Functions
 cd src\Functions
-dotnet new func --name Functions --template "Isolated worker" -f net8.0
+dotnet new func -n Functions -F net8.0
 ```
+
+> **Nota:** La plantilla actual ya genera **isolated worker**. No uses `--template "Isolated worker"` (ese parámetro ya no existe). Alternativa con Core Tools: `func init . --worker-runtime dotnet-isolated --target-framework net8.0`.
 
 Añadir paquetes para Service Bus:
 
