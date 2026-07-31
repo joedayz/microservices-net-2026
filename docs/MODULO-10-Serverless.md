@@ -36,7 +36,7 @@ Crear una Azure Function que consuma mensajes del topic **product-events** de Se
 ### Prerrequisitos
 
 - .NET 8 SDK (Azure Functions isolated worker usa .NET 8; puede coexistir con .NET 10 en el resto del taller)
-- Cuenta Azure con un **Service Bus** namespace
+- Cuenta Azure (el Service Bus se crea en este laboratorio si aún no lo tienes)
 - **Azure Functions Core Tools** (para ejecutar en local)
 
 ---
@@ -172,30 +172,50 @@ public class ProcessProductEvent
 }
 ```
 
-En `Program.cs` (proyecto isolated worker) debe estar registrado el host y los servicios. Ejemplo mínimo:
+En `Program.cs` (proyecto isolated worker **Worker 2.x**) usa `FunctionsApplication`, no el `HostBuilder` antiguo:
 
 ```csharp
-using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.DependencyInjection;
 
-var host = new HostBuilder()
-    .ConfigureFunctionsWorkerDefaults()
-    .ConfigureServices(services =>
-    {
-        services.AddApplicationInsightsTelemetryWorkerService();
-        services.ConfigureFunctionsApplicationInsights();
-    })
-    .Build();
+// Worker 2.x: FunctionsApplication (no HostBuilder + ConfigureFunctionsWorkerDefaults)
+var builder = FunctionsApplication.CreateBuilder(args);
 
-await host.RunAsync();
+builder.ConfigureFunctionsWebApplication();
+
+builder.Build().Run();
 ```
+
+> **⚠️ Error frecuente:** Si pegas el ejemplo viejo con `new HostBuilder().ConfigureFunctionsWorkerDefaults()`, fallará con la plantilla actual (`FunctionsApplicationBuilder` no tiene ese método).
 
 ---
 
 ### Paso 5: Configuración local
 
-- **`local.settings.json`** no se sube al repo (está en `.gitignore`). Copia la plantilla:
+> **¿Aún no tienes Azure Service Bus?** Completa primero la sección siguiente (*Si no has creado Azure Service Bus*) y luego vuelve aquí a pegar la connection string.
+
+- **`local.settings.json`** no se sube al repo (está en `.gitignore`). Contenido completo:
+
+**Archivo: `src/Functions/local.settings.json`**
+
+```json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "ServiceBusConnection": "Endpoint=sb://TU-NAMESPACE.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=TU_KEY"
+  }
+}
+```
+
+| Clave | Valor |
+|-------|--------|
+| `AzureWebJobsStorage` | Storage local (`UseDevelopmentStorage=true`). En Mac/Linux suele requerir [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) (`npx azurite`). También puedes poner una connection string real de Storage Account. |
+| `FUNCTIONS_WORKER_RUNTIME` | Debe ser `dotnet-isolated` |
+| `ServiceBusConnection` | Connection string del Service Bus (Portal → Service Bus → Shared access policies → RootManageSharedAccessKey → **Primary connection string**) |
+
+Plantilla en el repo (sin secretos reales):
 
 ```bash
 # Linux/macOS
@@ -205,7 +225,7 @@ cp src/Functions/local.settings.json.example src/Functions/local.settings.json
 Copy-Item src\Functions\local.settings.json.example src\Functions\local.settings.json
 ```
 
-Edita `local.settings.json` y pon tu **connection string** de Service Bus en `ServiceBusConnection` (desde Azure Portal → Service Bus → Shared access policies → RootManageSharedAccessKey → Connection string).
+Luego edita `local.settings.json` y reemplaza `ServiceBusConnection` con tu connection string real.
 
 - **`host.json`** (ejemplo con extensión Service Bus):
 
@@ -226,20 +246,94 @@ Edita `local.settings.json` y pon tu **connection string** de Service Bus en `Se
 
 ---
 
-### Paso 6: Crear topic y suscripción en Azure Service Bus
+### Si no has creado Azure Service Bus
+
+Sigue estos pasos **antes** de configurar `ServiceBusConnection` en `local.settings.json`.
+
+#### 1. Login y resource group
+
+```bash
+az login
+
+# Si no existe el resource group del taller:
+az group create --name rg-microservices --location eastus
+```
+
+#### 2. Crear el namespace de Service Bus
+
+> El nombre del namespace debe ser **único a nivel global** en Azure. Cambia el sufijo si `sb-microservices-XXXX` ya está tomado.
+>
+> **SKU Standard** (no Basic): el SKU Basic **no soporta topics**.
+
+```bash
+RESOURCE_GROUP=rg-microservices
+LOCATION=eastus
+# Cambia el nombre si ya está en uso
+NAMESPACE=sb-microservices-$RANDOM
+
+az servicebus namespace create \
+  --resource-group $RESOURCE_GROUP \
+  --name $NAMESPACE \
+  --location $LOCATION \
+  --sku Standard
+
+echo "Namespace creado: $NAMESPACE"
+```
+
+#### 3. Crear topic y suscripción
+
+```bash
+az servicebus topic create \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $NAMESPACE \
+  --name product-events
+
+az servicebus topic subscription create \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $NAMESPACE \
+  --topic-name product-events \
+  --name product-events-sub
+```
+
+#### 4. Obtener la connection string
+
+```bash
+az servicebus namespace authorization-rule keys list \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $NAMESPACE \
+  --name RootManageSharedAccessKey \
+  --query primaryConnectionString \
+  -o tsv
+```
+
+Copia ese valor y pégalo en `local.settings.json` → `Values.ServiceBusConnection`.
+
+**Desde el Portal (alternativa):**
+
+1. Azure Portal → **Create a resource** → **Service Bus** → Create  
+2. Resource group: `rg-microservices` · Name: único · Pricing tier: **Standard**  
+3. Tras crear → **Shared access policies** → **RootManageSharedAccessKey** → copia **Primary connection string**  
+4. **Entities** → **Topics** → `product-events` → **Subscriptions** → `product-events-sub`
+
+---
+
+### Paso 6: Crear topic y suscripción (si el namespace ya existía)
+
+Si creaste el namespace en la sección anterior, **ya tienes** topic y suscripción. Omite este paso.
+
+Si el namespace ya existía de antes, crea solo topic + suscripción:
 
 En Azure Portal:
 
-1. Ve a tu **Service Bus** namespace (ej. `sb-microservices-joedayz`).
+1. Ve a tu **Service Bus** namespace.
 2. **Entities** → **Topics** → **+ Topic** → nombre: `product-events`.
 3. Entra al topic **product-events** → **Subscriptions** → **+ Subscription** → nombre: `product-events-sub`.
 
 O con Azure CLI:
 
 ```bash
-# Variables (ajusta nombres y grupo de recursos)
 RESOURCE_GROUP=rg-microservices
-NAMESPACE=sb-microservices-joedayz
+NAMESPACE=sb-microservices-TU_NOMBRE   # el que ya tengas
 
 az servicebus topic create --resource-group $RESOURCE_GROUP --namespace-name $NAMESPACE --name product-events
 az servicebus topic subscription create --resource-group $RESOURCE_GROUP --namespace-name $NAMESPACE --topic-name product-events --name product-events-sub
@@ -302,52 +396,150 @@ choco install ngrok
 sudo snap install ngrok
 ```
 
-Configurar autenticación (token de ngrok.com):
+Configurar autenticación (token desde [ngrok Dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)):
+
 ```bash
 ngrok config add-authtoken TU_TOKEN
 ```
 
-Exponer servicios (en terminales separadas o con un `ngrok.yml` con varios túneles):
+Eso guarda el token en el config del usuario (no en el repo):
+
+| SO | Ruta de `ngrok.yml` |
+|----|---------------------|
+| macOS | `~/Library/Application Support/ngrok/ngrok.yml` |
+| Linux | `~/.config/ngrok/ngrok.yml` |
+| Windows | `%LocalAppData%\ngrok\ngrok.yml` |
+
+Comprobar: `ngrok config check`
+
+Exponer servicios (en terminales separadas):
+
 ```bash
 # ProductService en 5001
 ngrok http 5001
 
-# OrderService en 5003
+# OrderService en 5003 (otra terminal)
 ngrok http 5003
 ```
 
-Copia la URL **https** que te da ngrok (ej. `https://xxxx.ngrok-free.app`) para usarla como backend en APIM.
+Copia la URL **https** que te da ngrok (ej. `https://xxxx.ngrok-free.app`) para usarla como `--service-url` en APIM.
+
+### Si no has creado Azure API Management (APIM)
+
+Sigue estos pasos **antes** de crear las APIs con `az apim api create`.
+
+> APIM en SKU **Developer** tarda **30–45 minutos** en aprovisionarse. El nombre debe ser **único a nivel global**.
+
+```bash
+az login
+
+RESOURCE_GROUP=rg-microservices
+LOCATION=eastus
+# Cambia el nombre si ya está tomado
+APIM_NAME=apim-microservices-$RANDOM
+PUBLISHER_NAME="JoeDayz"
+PUBLISHER_EMAIL="tu@email.com"
+
+# Resource group (si no existe)
+az group create --name $RESOURCE_GROUP --location $LOCATION
+
+# Crear APIM (SKU Developer = barato para labs; no es SLA de producción)
+az apim create \
+  --name $APIM_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --publisher-name "$PUBLISHER_NAME" \
+  --publisher-email "$PUBLISHER_EMAIL" \
+  --location $LOCATION \
+  --sku-name Developer
+
+echo "APIM creado: $APIM_NAME"
+echo "Gateway URL: https://$APIM_NAME.azure-api.net"
+```
+
+Comprobar estado (debe quedar en `Succeeded` / `Online`):
+
+```bash
+az apim show --name $APIM_NAME --resource-group $RESOURCE_GROUP --query "{name:name,state:provisioningState,gateway:gatewayUrl}" -o table
+```
+
+**Desde el Portal (alternativa):**
+
+1. Azure Portal → **Create a resource** → **API Management**  
+2. Resource group: `rg-microservices`  
+3. Name: único globalmente (ej. `apim-microservices-30754`)  
+4. Organization name / Admin email: los tuyos  
+5. Pricing tier: **Developer**  
+6. Create → espera a que termine el despliegue  
+
+Cuando esté listo, anota:
+- **Gateway URL:** `https://<APIM_NAME>.azure-api.net`
+- **Subscription key:** Portal → APIM → **Subscriptions** → Built-in all-access → Show/copy primary key (`Ocp-Apim-Subscription-Key`)
 
 ### Crear APIs en APIM con la CLI (comandos actualizados)
 
-La CLI **no** incluye `az apim backend create`. La URL del backend se configura al crear la API con `--service-url`. Usa estos comandos (sustituye las URLs por las de ngrok o App Service):
+> Si aún no tienes la instancia APIM, completa primero la sección anterior.
+
+La CLI **no** incluye `az apim backend create`. La URL del backend se configura al crear la API con `--service-url`.
+
+> **Importante:** Solo crear la API **no basta**. Sin **operations**, APIM responde `{ "statusCode": 404, "message": "Resource not found" }`.
 
 ```bash
 RESOURCE_GROUP=rg-microservices
-APIM_NAME=apim-microservices-joedayz
+APIM_NAME=apim-microservices-TU_NOMBRE   # el que creaste arriba
+# URLs HTTPS de ngrok (sin path al final)
+NGROK_PRODUCTS=https://TU-URL-NGROK-PRODUCTO.ngrok-free.app
+NGROK_ORDERS=https://TU-URL-NGROK-ORDERS.ngrok-free.app
 
-# API ProductService (path: products)
+# API ProductService (APIM path: /products → backend /api/v1/Products)
 az apim api create \
   --resource-group $RESOURCE_GROUP \
   --service-name $APIM_NAME \
   --api-id product-api \
   --display-name "Product API" \
   --path products \
-  --service-url https://TU-URL-NGROK-PRODUCTO.ngrok-free.app \
+  --service-url "$NGROK_PRODUCTS/api/v1/Products" \
   --protocols https
 
-# API OrderService (path: orders)
+az apim api operation create \
+  --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id product-api \
+  --operation-id get-all-products --display-name "Get all products" \
+  --method GET --url-template "/"
+
+az apim api operation create \
+  --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id product-api \
+  --operation-id get-product-by-id --display-name "Get product by id" \
+  --method GET --url-template "/{id}" \
+  --template-parameters name=id type=string required=true
+
+# API OrderService (APIM path: /orders → backend /api/v1/Orders)
 az apim api create \
   --resource-group $RESOURCE_GROUP \
   --service-name $APIM_NAME \
   --api-id order-api \
   --display-name "Order API" \
   --path orders \
-  --service-url https://TU-URL-NGROK-ORDERS.ngrok-free.app \
+  --service-url "$NGROK_ORDERS/api/v1/Orders" \
   --protocols https
+
+az apim api operation create \
+  --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id order-api \
+  --operation-id get-all-orders --display-name "Get all orders" \
+  --method GET --url-template "/"
+
+az apim api operation create \
+  --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id order-api \
+  --operation-id get-available-products --display-name "Get available products" \
+  --method GET --url-template "/available-products"
 ```
 
-Después, en el Portal de APIM puedes añadir **operations** (GET, POST, etc.) a cada API. Para probar:
+Verificar operations:
+
+```bash
+az apim api operation list --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id product-api -o table
+az apim api operation list --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id order-api -o table
+```
+
+Después, en el Portal de APIM puedes añadir más **operations** (POST, PUT, DELETE). Para probar:
 
 ```bash
 curl -H "Ocp-Apim-Subscription-Key: <SUBSCRIPTION_KEY>" \
@@ -356,7 +548,42 @@ curl -H "Ocp-Apim-Subscription-Key: <SUBSCRIPTION_KEY>" \
   "https://<APIM_NAME>.azure-api.net/orders/available-products"
 ```
 
-Si tu backend expone rutas bajo `/api/v1/Products`, configura en la operación de APIM la **reescritura de URL** al backend (rewrite-uri) a `/api/v1/Products` para que APIM llame al path correcto.
+> Si ngrok reinicia, la URL cambia: actualiza con  
+> `az apim api update ... --set serviceUrl="https://NUEVA-URL.ngrok-free.app/api/v1/Products"`.
+
+#### Si las APIs ya existen pero dan 404 (`Resource not found`)
+
+Causa habitual: la API se creó con `az apim api create` **sin** `az apim api operation create`. Comprueba:
+
+```bash
+az apim api list --resource-group $RESOURCE_GROUP --service-name $APIM_NAME -o table
+az apim api operation list --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id product-api -o table
+az apim api operation list --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id order-api -o table
+```
+
+Si la lista de operations está vacía, crea las operations (mismos comandos `az apim api operation create` de arriba) y corrige el `serviceUrl` para incluir el path del backend:
+
+```bash
+# Sustituye NGROK_* por tus URLs actuales de ngrok
+az apim api update \
+  --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id product-api \
+  --set serviceUrl="$NGROK_PRODUCTS/api/v1/Products"
+
+az apim api update \
+  --resource-group $RESOURCE_GROUP --service-name $APIM_NAME --api-id order-api \
+  --set serviceUrl="$NGROK_ORDERS/api/v1/Orders"
+```
+
+Mapeo resultante:
+
+| Llamada a APIM | Backend (ngrok + servicio) |
+|----------------|----------------------------|
+| `GET .../products` | `GET {NGROK_PRODUCTS}/api/v1/Products` |
+| `GET .../products/{id}` | `GET {NGROK_PRODUCTS}/api/v1/Products/{id}` |
+| `GET .../orders` | `GET {NGROK_ORDERS}/api/v1/Orders` |
+| `GET .../orders/available-products` | `GET {NGROK_ORDERS}/api/v1/Orders/available-products` |
+
+Asegúrate también de que ProductService, OrderService y los túneles **ngrok** estén corriendo; si ngrok está caído, APIM devolverá error de backend (no el 404 de “Resource not found”).
 
 ---
 
@@ -384,7 +611,7 @@ En `appsettings.json` solo referencias: `"ServiceBus:ConnectionString": ""` o le
 - [ ] Topic `product-events` y suscripción `product-events-sub` creados en Service Bus.
 - [ ] `local.settings.json` configurado con `ServiceBusConnection` (no subido al repo).
 - [ ] Function ejecutada en local (`func start`) y mensaje de prueba recibido (Portal o código).
-- [ ] (Opcional) ngrok instalado y APIs de APIM creadas con `az apim api create` (product-api, order-api).
+- [ ] (Opcional) ngrok instalado; APIM creado; APIs **y operations** creadas (`az apim api create` + `az apim api operation create`); `curl` a `/products` y `/orders/available-products` responde 200.
 - [ ] (Opcional) ProductService publicando en Service Bus vía user-secrets.
 
 ---

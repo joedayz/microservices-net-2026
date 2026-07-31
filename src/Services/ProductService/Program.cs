@@ -199,6 +199,25 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddGrpc();
 builder.Services.AddGrpcReflection();
 
+// Health Checks (Módulo 11) — ANTES de builder.Build()
+var healthChecksBuilder = builder.Services.AddHealthChecks();
+
+if (!string.IsNullOrEmpty(connectionString))
+{
+    healthChecksBuilder.AddNpgSql(
+        connectionString,
+        name: "postgresql",
+        tags: new[] { "db", "dependency" });
+}
+
+if (!string.IsNullOrEmpty(redisConnection))
+{
+    healthChecksBuilder.AddRedis(
+        redisConnection,
+        name: "redis",
+        tags: new[] { "cache", "dependency" });
+}
+
 var app = builder.Build();
 
 if (appConfigEnabled && !string.IsNullOrEmpty(appConfigEndpoint))
@@ -233,6 +252,12 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapGrpcService<ProductGrpcService>();
 app.MapGrpcReflectionService();
+
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false
+});
 
 // Ensure database is created and migrate
 using (var scope = app.Services.CreateScope())

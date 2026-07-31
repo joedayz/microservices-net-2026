@@ -108,42 +108,86 @@ dotnet add package AspNetCore.HealthChecks.Uris --version 9.0.0
 
 ### Paso 2 — Políticas de resiliencia (ResiliencePolicies.cs)
 
-Se creó el archivo `src/Services/OrderService/Infrastructure/ResiliencePolicies.cs` con 3 políticas:
+**Archivo: `src/Services/OrderService/Infrastructure/ResiliencePolicies.cs`** (completo):
 
 ```csharp
-// Retry: 3 intentos con backoff exponencial + jitter
-public static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy()
-{
-    var jitter = new Random();
-    return HttpPolicyExtensions
-        .HandleTransientHttpError()       // 5xx y 408
-        .Or<TimeoutRejectedException>()   // timeout de Polly
-        .WaitAndRetryAsync(
-            retryCount: 3,
-            sleepDurationProvider: attempt =>
-                TimeSpan.FromSeconds(Math.Pow(2, attempt))
-                + TimeSpan.FromMilliseconds(jitter.Next(0, 1000)),
-            onRetry: (outcome, timespan, attempt, context) => { /* logging */ });
-}
+using System.Net.Http;
+using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.Extensions.Http;
+using Polly.Timeout;
 
-// Circuit Breaker: abre tras 3 fallos, espera 30s
-public static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakerPolicy()
-{
-    return HttpPolicyExtensions
-        .HandleTransientHttpError()
-        .Or<TimeoutRejectedException>()
-        .CircuitBreakerAsync(
-            handledEventsAllowedBeforeBreaking: 3,
-            durationOfBreak: TimeSpan.FromSeconds(30),
-            onBreak: ..., onReset: ..., onHalfOpen: ...);
-}
+namespace OrderService.Infrastructure;
 
-// Timeout: 10 segundos por request
-public static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
+/// <summary>
+/// Políticas de resiliencia Polly para el HttpClient hacia ProductService.
+/// Orden al encadenar en Program.cs: Retry → Circuit Breaker → Timeout.
+/// </summary>
+public static class ResiliencePolicies
 {
-    return Policy.TimeoutAsync<HttpResponseMessage>(
-        seconds: 10,
-        timeoutStrategy: TimeoutStrategy.Optimistic);
+    /// <summary>
+    /// Retry: hasta 3 intentos con backoff exponencial + jitter.
+    /// Cubre errores HTTP transitorios (5xx, 408) y timeouts de Polly.
+    /// </summary>
+    public static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(ILogger? logger = null)
+    {
+        var jitter = new Random();
+
+        return HttpPolicyExtensions
+            .HandleTransientHttpError()
+            .Or<TimeoutRejectedException>()
+            .WaitAndRetryAsync(
+                retryCount: 3,
+                sleepDurationProvider: attempt =>
+                    TimeSpan.FromSeconds(Math.Pow(2, attempt))
+                    + TimeSpan.FromMilliseconds(jitter.Next(0, 1000)),
+                onRetry: (outcome, timespan, attempt, context) =>
+                {
+                    logger?.LogWarning(
+                        "Retry {Attempt} after {Delay}s due to: {Reason}",
+                        attempt,
+                        timespan.TotalSeconds,
+                        outcome.Exception?.Message ?? outcome.Result?.StatusCode.ToString());
+                });
+    }
+
+    /// <summary>
+    /// Circuit Breaker: abre tras 3 fallos consecutivos y espera 30s antes de half-open.
+    /// </summary>
+    public static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakerPolicy(ILogger? logger = null)
+    {
+        return HttpPolicyExtensions
+            .HandleTransientHttpError()
+            .Or<TimeoutRejectedException>()
+            .CircuitBreakerAsync(
+                handledEventsAllowedBeforeBreaking: 3,
+                durationOfBreak: TimeSpan.FromSeconds(30),
+                onBreak: (outcome, breakDelay) =>
+                {
+                    logger?.LogError(
+                        "Circuit OPEN for {BreakDelay}s. Reason: {Reason}",
+                        breakDelay.TotalSeconds,
+                        outcome.Exception?.Message ?? outcome.Result?.StatusCode.ToString());
+                },
+                onReset: () =>
+                {
+                    logger?.LogInformation("Circuit RESET — tráfico normal reanudado");
+                },
+                onHalfOpen: () =>
+                {
+                    logger?.LogInformation("Circuit HALF-OPEN — permitiendo una prueba");
+                });
+    }
+
+    /// <summary>
+    /// Timeout: máximo 10 segundos por request (optimistic = respeta CancellationToken).
+    /// </summary>
+    public static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
+    {
+        return Policy.TimeoutAsync<HttpResponseMessage>(
+            seconds: 10,
+            timeoutStrategy: TimeoutStrategy.Optimistic);
+    }
 }
 ```
 
@@ -176,24 +220,30 @@ builder.Services.AddHttpClient<IProductServiceClient, HttpProductServiceClient>(
 
 ### Paso 4 — Fallback con cache (HttpProductServiceClient)
 
-Se agregó un mecanismo de fallback que almacena la última respuesta exitosa:
+Va en el cliente HTTP existente:
+
+**Archivo: `src/Services/OrderService/Clients/HttpProductServiceClient.cs`**
+
+No va en `Program.cs` ni en `ResiliencePolicies.cs`. Polly reintenta/corta el circuito; este fallback es la **última red de seguridad** en el cliente: si tras Polly sigue fallando, se sirve la última respuesta exitosa en memoria.
+
+Resumen de cambios en esa clase:
 
 ```csharp
-// Cache estático para fallback
-private static readonly ConcurrentDictionary<string, ProductInfo> _productCache = new();
+// Cache estático para fallback (en HttpProductServiceClient)
+private static readonly ConcurrentDictionary<string, ProductInfoDto> _productCache = new();
 
-public async Task<ProductInfo?> GetProductAsync(Guid id, CancellationToken ct)
+public async Task<ProductInfoDto?> GetProductByIdAsync(Guid id, CancellationToken cancellationToken = default)
 {
+    var cacheKey = $"product:{id}";
     try
     {
-        var response = await _httpClient.GetAsync(..., ct);
-        // ... éxito: guardar en cache
-        _productCache[cacheKey] = product;
+        // llamar a ProductService...
+        // si OK → _productCache[cacheKey] = product;
         return product;
     }
     catch (Exception ex)
     {
-        // Fallo: retornar desde cache
+        // Fallo (tras retries/circuit breaker) → retornar desde cache
         return GetFallbackProduct(cacheKey);
     }
 }
@@ -205,26 +255,65 @@ public async Task<ProductInfo?> GetProductAsync(Guid id, CancellationToken ct)
 
 ### Paso 5 — Health Checks
 
-#### ProductService (`/health`)
-Verifica:
-- **PostgreSQL** — conexión a la base de datos
-- **Redis** — conexión al cache
+Todo esto va en el **`Program.cs`** de cada proyecto (no en un controller). Hay **dos partes**:
+
+1. **Registro** → `builder.Services.AddHealthChecks()...` (antes de `var app = builder.Build()`)
+2. **Endpoints** → `app.MapHealthChecks(...)` (después de `builder.Build()`, junto a `MapControllers`)
+
+#### ProductService — `src/Services/ProductService/Program.cs`
+
+**Paquetes** (si aún no están):
+```bash
+cd src/Services/ProductService
+dotnet add package AspNetCore.HealthChecks.NpgSql
+dotnet add package AspNetCore.HealthChecks.Redis
+```
+
+**1) Registro** (después de configurar Redis / connection strings, antes de `var app = builder.Build()`):
 
 ```csharp
+// Health Checks (Módulo 11)
 var healthChecksBuilder = builder.Services.AddHealthChecks();
 
 if (!string.IsNullOrEmpty(connectionString))
-    healthChecksBuilder.AddNpgSql(connectionString, name: "postgresql", tags: new[] { "db", "dependency" });
+{
+    healthChecksBuilder.AddNpgSql(
+        connectionString,
+        name: "postgresql",
+        tags: new[] { "db", "dependency" });
+}
 
 if (!string.IsNullOrEmpty(redisConnection))
-    healthChecksBuilder.AddRedis(redisConnection, name: "redis", tags: new[] { "cache", "dependency" });
+{
+    healthChecksBuilder.AddRedis(
+        redisConnection,
+        name: "redis",
+        tags: new[] { "cache", "dependency" });
+}
 ```
 
-#### OrderService (`/health`)
-Verifica:
-- **ProductService** — que el servicio downstream está respondiendo
+**2) Endpoints** (después de `app.MapControllers()`):
 
 ```csharp
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false  // solo liveness: proceso vivo, sin dependencias
+});
+```
+
+#### OrderService — `src/Services/OrderService/Program.cs`
+
+**Paquete:**
+```bash
+cd src/Services/OrderService
+dotnet add package AspNetCore.HealthChecks.Uris
+```
+
+**1) Registro** (después de definir `httpUrl`, antes de `var app = builder.Build()`):
+
+```csharp
+// Health Checks (Módulo 11) — verifica ProductService downstream
 builder.Services.AddHealthChecks()
     .AddUrlGroup(
         new Uri($"{httpUrl}/api/v1/Products"),
@@ -232,20 +321,47 @@ builder.Services.AddHealthChecks()
         tags: new[] { "dependency" });
 ```
 
-#### Gateway (`/health`)
-Verifica ambos servicios downstream:
-- **ProductService** — `http://localhost:5001/health`
-- **OrderService** — `http://localhost:5003/health`
+**2) Endpoints** (después de `app.MapControllers()`):
+
+```csharp
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false
+});
+```
+
+#### Gateway — `src/Gateway/Program.cs`
+
+**Paquete:**
+```bash
+cd src/Gateway
+dotnet add package AspNetCore.HealthChecks.Uris
+```
+
+**1) Registro** (antes de `var app = builder.Build()`):
 
 ```csharp
 builder.Services.AddHealthChecks()
-    .AddUrlGroup(new Uri("http://localhost:5001/health"), name: "product-service", ...)
-    .AddUrlGroup(new Uri("http://localhost:5003/health"), name: "order-service", ...);
+    .AddUrlGroup(new Uri("http://localhost:5001/health"), name: "product-service", tags: new[] { "dependency" })
+    .AddUrlGroup(new Uri("http://localhost:5003/health"), name: "order-service", tags: new[] { "dependency" });
 ```
 
-Cada servicio expone dos endpoints:
-- `GET /health` — Estado completo en JSON con detalle de cada check
-- `GET /health/live` — Liveness (solo verifica que el proceso responde, sin checks de dependencias)
+**2) Endpoints** (después de `app.MapReverseProxy()` o junto a él):
+
+```csharp
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false
+});
+```
+
+Cada servicio expone:
+- `GET /health` — Estado completo (incluye dependencias)
+- `GET /health/live` — Liveness (solo verifica que el proceso responde)
+
+> **Nota:** Estos endpoints son públicos (sin JWT). No hace falta `[AllowAnonymous]` porque no pasan por controllers con `[Authorize]`.
 
 ---
 

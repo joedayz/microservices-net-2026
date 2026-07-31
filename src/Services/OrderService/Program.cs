@@ -116,6 +116,21 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("ReadOnly", policy => policy.RequireRole("Admin", "Reader"));
 });
 
+builder.Services.AddHttpClient<IProductServiceClient, HttpProductServiceClient>(client =>
+{
+    client.BaseAddress = new Uri(httpUrl);
+})
+.AddPolicyHandler(ResiliencePolicies.GetRetryPolicy())
+.AddPolicyHandler(ResiliencePolicies.GetCircuitBreakerPolicy())
+.AddPolicyHandler(ResiliencePolicies.GetTimeoutPolicy());
+
+builder.Services.AddHealthChecks()
+    .AddUrlGroup(
+        new Uri($"{httpUrl}/api/v1/Products"),
+        name: "product-service",
+        tags: new[] { "dependency" });
+
+
 
 var app = builder.Build();
 
