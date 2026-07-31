@@ -145,6 +145,16 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = WriteHealthJson
+});
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = WriteHealthJson
+});
+
 // Aplicar migraciones automáticamente al iniciar (igual que ProductService)
 using (var scope = app.Services.CreateScope())
 {
@@ -153,3 +163,23 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+static Task WriteHealthJson(HttpContext context, Microsoft.Extensions.Diagnostics.HealthChecks.HealthReport report)
+{
+    context.Response.ContentType = "application/json; charset=utf-8";
+    var payload = new
+    {
+        status = report.Status.ToString(),
+        totalDurationMs = report.TotalDuration.TotalMilliseconds,
+        entries = report.Entries.ToDictionary(
+            e => e.Key,
+            e => new
+            {
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                durationMs = e.Value.Duration.TotalMilliseconds,
+                exception = e.Value.Exception?.Message
+            })
+    };
+    return context.Response.WriteAsJsonAsync(payload);
+}

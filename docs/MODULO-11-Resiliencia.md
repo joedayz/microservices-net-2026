@@ -294,13 +294,42 @@ if (!string.IsNullOrEmpty(redisConnection))
 
 **2) Endpoints** (después de `app.MapControllers()`):
 
+> Por defecto `MapHealthChecks` responde **texto plano** (`Healthy`). Para poder usar `| jq`, configura un `ResponseWriter` JSON:
+
 ```csharp
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = WriteHealthJson
+});
 app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
-    Predicate = _ => false  // solo liveness: proceso vivo, sin dependencias
+    Predicate = _ => false,  // solo liveness: proceso vivo, sin dependencias
+    ResponseWriter = WriteHealthJson
 });
+
+// Al final de Program.cs (función local):
+static Task WriteHealthJson(HttpContext context, Microsoft.Extensions.Diagnostics.HealthChecks.HealthReport report)
+{
+    context.Response.ContentType = "application/json; charset=utf-8";
+    var payload = new
+    {
+        status = report.Status.ToString(),
+        totalDurationMs = report.TotalDuration.TotalMilliseconds,
+        entries = report.Entries.ToDictionary(
+            e => e.Key,
+            e => new
+            {
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                durationMs = e.Value.Duration.TotalMilliseconds,
+                exception = e.Value.Exception?.Message
+            })
+    };
+    return context.Response.WriteAsJsonAsync(payload);
+}
 ```
+
+Usa el **mismo** `WriteHealthJson` + `MapHealthChecks` en OrderService y Gateway.
 
 #### OrderService — `src/Services/OrderService/Program.cs`
 
@@ -323,11 +352,17 @@ builder.Services.AddHealthChecks()
 
 **2) Endpoints** (después de `app.MapControllers()`):
 
+> Por defecto `MapHealthChecks` responde **texto plano** (`Healthy`). Para poder usar `| jq`, usa el mismo `ResponseWriter` JSON (`WriteHealthJson`) documentado arriba en ProductService.
+
 ```csharp
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = WriteHealthJson
+});
 app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
-    Predicate = _ => false
+    Predicate = _ => false,
+    ResponseWriter = WriteHealthJson
 });
 ```
 
@@ -349,11 +384,17 @@ builder.Services.AddHealthChecks()
 
 **2) Endpoints** (después de `app.MapReverseProxy()` o junto a él):
 
+Usa el mismo `WriteHealthJson` que en ProductService:
+
 ```csharp
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = WriteHealthJson
+});
 app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
-    Predicate = _ => false
+    Predicate = _ => false,
+    ResponseWriter = WriteHealthJson
 });
 ```
 
@@ -436,16 +477,20 @@ echo $TOKEN
 
 **Usar el token en endpoints protegidos:**
 ```bash
-# Crear una orden (requiere rol Admin)
+# 1) Obtener un productId real (no uses placeholders tipo <PRODUCT_ID>)
+PRODUCT_ID=$(curl -s http://localhost:5001/api/v1/Products | jq -r '.[0].id')
+echo "PRODUCT_ID=$PRODUCT_ID"
+
+# 2) Crear una orden (requiere rol Admin)
 curl -s -X POST http://localhost:5003/api/v1/Orders \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "customerName": "Juan Pérez",
-    "items": [
-      { "productId": "<PRODUCT_ID>", "quantity": 1 }
+  -d "{
+    \"customerName\": \"Juan Pérez\",
+    \"items\": [
+      { \"productId\": \"$PRODUCT_ID\", \"quantity\": 1 }
     ]
-  }' | jq
+  }" | jq
 ```
 
 > **Nota:** Los endpoints de lectura (`GET /api/v1/Orders`, `GET /api/v1/Orders/available-products`) y los health checks (`/health`, `/health/live`) **no requieren token**.

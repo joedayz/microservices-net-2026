@@ -1201,10 +1201,11 @@ curl -X POST http://localhost:5001/api/v1/Products \
   -H "Content-Type: application/json" \
   -d '{"name":"Monitor","description":"4K","price":499.99,"stock":10}' | jq
 
-# Guarda el "id" del producto creado y crea una orden (OrderService → ProductService)
+# Guarda el id del primer producto (o del que acabas de crear) y crea una orden
+PRODUCT_ID=$(curl -s http://localhost:5001/api/v1/Products | jq -r '.[0].id')
 curl -X POST http://localhost:5003/api/v1/Orders \
   -H "Content-Type: application/json" \
-  -d '{"customerName":"Juan Perez","items":[{"productId":"<ID_DEL_PRODUCTO>","quantity":2}]}' | jq
+  -d "{\"customerName\":\"Juan Perez\",\"items\":[{\"productId\":\"$PRODUCT_ID\",\"quantity\":2}]}" | jq
 
 # Listar las órdenes creadas (deben venir de PostgreSQL, no de memoria)
 curl http://localhost:5003/api/v1/Orders | jq
