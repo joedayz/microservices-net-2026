@@ -245,9 +245,13 @@ builder.Services.AddAuthorization(options =>
 
 #### Configurar Swagger con soporte JWT
 
-Reemplazar la configuración simple de Swagger por una que incluya el botón "Authorize":
+Reemplazar la configuración simple de Swagger por una que incluya el botón "Authorize".
+
+> **⚠️ Swashbuckle 10 + Microsoft.OpenApi 2:** `AddSecurityRequirement` ahora recibe un *lambda* con el documento, y la referencia se hace con `OpenApiSecuritySchemeReference` (no con un `OpenApiSecurityScheme` anónimo). Namespace: `Microsoft.OpenApi` (ya no `Microsoft.OpenApi.Models`).
 
 ```csharp
+using Microsoft.OpenApi;
+
 // Swagger / OpenAPI (versioned)
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -255,7 +259,6 @@ builder.Services.AddSwaggerGen(options =>
     // Configurar JWT en Swagger UI
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Name = "Authorization",
         Type = SecuritySchemeType.Http,
         Scheme = "bearer",
         BearerFormat = "JWT",
@@ -263,15 +266,9 @@ builder.Services.AddSwaggerGen(options =>
         Description = "Ingrese el token JWT. Ejemplo: eyJhbGciOi..."
     });
 
-    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
     {
-        {
-            new OpenApiSecurityScheme
-            {
-                Name = "Bearer"
-            },
-            Array.Empty<string>()
-        }
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
     });
 });
 builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();

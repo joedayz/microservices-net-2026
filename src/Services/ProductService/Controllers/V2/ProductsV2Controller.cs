@@ -1,4 +1,5 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ProductService.Application.Configuration;
@@ -10,6 +11,7 @@ namespace ProductService.Controllers.V2;
 [ApiController]
 [ApiVersion("2.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
+[Authorize(Policy = "ReadOnly")] 
 public class ProductsController : ControllerBase
 {
 

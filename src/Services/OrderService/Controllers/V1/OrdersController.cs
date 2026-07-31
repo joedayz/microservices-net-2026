@@ -1,4 +1,5 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OrderService.Application.DTOs;
 using OrderService.Clients;
@@ -9,6 +10,7 @@ namespace OrderService.Controllers.V1;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
+[Authorize]                                          // ← Protege TODO el controller
 public class OrdersController : ControllerBase
 {
     private readonly IOrderRepository _orderRepository;
@@ -21,6 +23,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpGet]
+    [AllowAnonymous]                                 // ← Listar órdenes es público
     public async Task<ActionResult<IEnumerable<OrderDto>>> GetAll(CancellationToken cancellationToken)
     {
         var orders = await _orderRepository.GetAllAsync(cancellationToken);
@@ -37,6 +40,7 @@ public class OrdersController : ControllerBase
 
     // IMPORTANTE: esta ruta debe declararse antes que "{id}" para que no colisione
     [HttpGet("available-products")]
+    [AllowAnonymous]  
     public async Task<ActionResult<IEnumerable<ProductInfoDto>>> GetAvailableProducts(CancellationToken cancellationToken)
     {
         var products = await _productServiceClient.GetAvailableProductsAsync(cancellationToken);
@@ -44,6 +48,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = "AdminOnly")] 
     public async Task<ActionResult<OrderDto>> Create([FromBody] CreateOrderDto dto, CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid) return BadRequest(ModelState);
@@ -71,6 +76,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpDelete("{id}")]
+    [Authorize(Policy = "AdminOnly")] 
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         var deleted = await _orderRepository.DeleteAsync(id, cancellationToken);

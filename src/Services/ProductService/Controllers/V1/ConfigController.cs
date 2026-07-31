@@ -1,4 +1,5 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ProductService.Application.Configuration;
@@ -7,6 +8,7 @@ namespace ProductService.Controllers.V1;
 
 [ApiController]
 [ApiVersion("1.0")]
+[Authorize(Policy = "AdminOnly")]   
 [Route("api/v{version:apiVersion}/[controller]")]
 public class ConfigController : ControllerBase
 {

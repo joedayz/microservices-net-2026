@@ -12,6 +12,10 @@ using ProductService.Domain.Events;
 using ProductService.Infrastructure.Messaging;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using ProductService.Grpc;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -84,9 +88,25 @@ builder.Services
         options.SubstituteApiVersionInUrl = true;
     });
 
-// Swagger / OpenAPI (del Módulo 3)
+// Swagger / OpenAPI (versioned)
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Configurar JWT en Swagger UI
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Ingrese el token JWT. Ejemplo: eyJhbGciOi..."
+    });
+
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
+    });
+});
 builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
 
 // Entity Framework Core + PostgreSQL (NUEVO en Módulo 4)
@@ -138,6 +158,43 @@ builder.WebHost.ConfigureKestrel(options =>
     options.ListenLocalhost(5002, o => o.Protocols = HttpProtocols.Http2);       // gRPC
 });
 
+
+
+// ============================
+// JWT Authentication
+// ============================
+var jwtSettings = builder.Configuration.GetSection("Jwt");
+var secretKey = jwtSettings["Key"] ?? "S3cur3K3y_F0r_D3v3l0pm3nt_Purp0s3s_Only_2025!";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,           // Valida quién emitió el token
+        ValidateAudience = true,         // Valida para quién es el token
+        ValidateLifetime = true,         // Valida que no haya expirado
+        ValidateIssuerSigningKey = true, // Valida la firma digital
+        ValidIssuer = jwtSettings["Issuer"] ?? "microservices-net-2025",
+        ValidAudience = jwtSettings["Audience"] ?? "microservices-api",
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+        ClockSkew = TimeSpan.Zero       // Sin tolerancia de tiempo
+    };
+});
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
+    options.AddPolicy("ReadOnly", policy => policy.RequireRole("Admin", "Reader"));
+});
+
+
+
+
 // gRPC (Módulo 7)
 builder.Services.AddGrpc();
 builder.Services.AddGrpcReflection();
@@ -171,6 +228,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication(); 
 app.UseAuthorization();
 app.MapControllers();
 app.MapGrpcService<ProductGrpcService>();
