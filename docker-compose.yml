@@ -55,8 +55,9 @@ services:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
       RABBITMQ_ERLANG_COOKIE: "microservices-secret-cookie"
+    # uid/gid 999 = usuario rabbitmq (evita eacces en .erlang.cookie con Podman)
     tmpfs:
-      - /var/lib/rabbitmq
+      - /var/lib/rabbitmq:uid=999,gid=999,mode=1777
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 10s
