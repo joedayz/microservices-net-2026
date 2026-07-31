@@ -223,7 +223,7 @@ if (app.Environment.IsDevelopment())
             );
         }
 
-        options.RoutePrefix = string.Empty; // Swagger en /
+        options.RoutePrefix = "swagger"; // UI en /swagger (también accesible vía Gateway :5010)
     });
 }
 

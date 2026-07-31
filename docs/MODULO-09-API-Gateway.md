@@ -225,15 +225,18 @@ Ajusta `Address` si tus servicios usan otros puertos o hosts.
 
 ### Paso 5: Añadir el Gateway a la solución
 
-Desde la raíz del repo (o desde la carpeta que contiene la solución):
+Desde la **raíz del repo** (donde está `Microservices.sln`):
 
-**Linux/macOS:**
 ```bash
-cd src/Services/ProductService
-dotnet sln add ../../Gateway/Gateway.csproj
+dotnet sln Microservices.sln add src/Gateway/Gateway.csproj
 ```
 
-**PowerShell / CMD:** Ajustar rutas si la solución está en otro sitio; el path relativo al `.sln` debe ser correcto (por ejemplo `..\..\Gateway\Gateway.csproj` si el sln está en `Services/ProductService`).
+Verificar:
+
+```bash
+dotnet sln Microservices.sln list
+# Debe incluir: Gateway, ProductService, OrderService
+```
 
 ### Paso 6: Probar el gateway
 
@@ -274,16 +277,26 @@ Si los backends responden correctamente cuando se llaman directo (5001 y 5003), 
 
 ### Paso 7 (opcional): Swagger de ProductService por el gateway
 
-Si quieres servir la UI de Swagger de ProductService a través del gateway, añade una ruta que envíe `/swagger` (y subpaths) al cluster de ProductService, por ejemplo:
+Si quieres servir la UI de Swagger de ProductService a través del gateway, ProductService debe exponer Swagger en `/swagger` (no en `/`):
+
+```csharp
+options.RoutePrefix = "swagger";
+```
+
+Luego añade estas rutas en el Gateway:
 
 ```json
 "swagger-products": {
   "ClusterId": "productservice",
   "Match": { "Path": "/swagger/{**catch-all}" }
+},
+"swagger-products-root": {
+  "ClusterId": "productservice",
+  "Match": { "Path": "/swagger" }
 }
 ```
 
-Luego podrías abrir `http://localhost:5010/swagger` y ver la documentación de ProductService (si ese servicio expone Swagger en `/swagger`).
+Abre `http://localhost:5010/swagger` (con ProductService y Gateway en marcha).
 
 ### ✅ Checklist
 
