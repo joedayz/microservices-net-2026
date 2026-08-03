@@ -19,7 +19,7 @@ builder.Services.AddHealthChecks()
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenLocalhost(5010, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    options.ListenAnyIP(5010, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
 });
 
 var app = builder.Build();

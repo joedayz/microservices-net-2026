@@ -81,7 +81,7 @@ else
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenLocalhost(5003, o => o.Protocols = HttpProtocols.Http1);
+    options.ListenAnyIP(5003, o => o.Protocols = HttpProtocols.Http1);
 });
 
 // ============================

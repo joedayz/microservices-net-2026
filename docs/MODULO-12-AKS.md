@@ -266,8 +266,8 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/cont
 ### Paso 7 — Script de despliegue
 
 ```bash
-# Despliegue completo con ACR
-./infrastructure/kubernetes/deploy.sh myacrregistry
+# Despliegue completo con ACR (usa $ACR_NAME definido en Opción A)
+./infrastructure/kubernetes/deploy.sh $ACR_NAME
 
 # Despliegue local (sin ACR, para Docker Desktop o Kind)
 ./infrastructure/kubernetes/deploy.sh
@@ -287,49 +287,86 @@ El script:
 ### Opción A — AKS (Azure)
 
 ```bash
-# 1. Crear Resource Group (si no existe)
-az group create --name rg-microservices --location eastus
+# 0. Nombres únicos con $RANDOM para evitar conflictos globales en Azure
+SUFFIX=$RANDOM
+RG="rg-microservices"
+ACR_NAME="myacr${SUFFIX}"
+AKS_NAME="aks-microservices-${SUFFIX}"
+echo "RG=$RG  ACR=$ACR_NAME  AKS=$AKS_NAME"   # guarda estos valores
+
+# 1. Crear Resource Group
+az group create --name $RG --location eastus
 
 # 2. Crear Azure Container Registry (ACR)
 az acr create \
-  --resource-group rg-microservices \
-  --name myacrregistry \
+  --resource-group $RG \
+  --name $ACR_NAME \
   --sku Basic
 
-# 3. Iniciar sesión en el ACR
-az acr login --name myacrregistry
+# 3. Build y push con az acr build (RECOMENDADO — compila en Azure, sin emulación local)
+# No requiere Docker ni Podman corriendo localmente. Ideal para Apple Silicon.
+az acr build --registry $ACR_NAME --platform linux/amd64 \
+  --image product-service:latest \
+  --file src/Services/ProductService/Dockerfile src/Services/
 
-# 4. Build y push de imágenes al ACR
-# Nota: --platform linux/amd64 genera imágenes para clusters AKS (amd64).
-# Los Dockerfiles usan FROM --platform=$BUILDPLATFORM para compilar nativamente en Apple Silicon.
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/product-service:latest \
-  -f src/Services/ProductService/Dockerfile src/Services/
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/order-service:latest \
-  -f src/Services/OrderService/Dockerfile src/Services/
-docker build --platform linux/amd64 -t myacrregistry.azurecr.io/gateway:latest \
-  -f src/Gateway/Dockerfile src/Gateway/
+az acr build --registry $ACR_NAME --platform linux/amd64 \
+  --image order-service:latest \
+  --file src/Services/OrderService/Dockerfile src/Services/
 
-docker push myacrregistry.azurecr.io/product-service:latest
-docker push myacrregistry.azurecr.io/order-service:latest
-docker push myacrregistry.azurecr.io/gateway:latest
+az acr build --registry $ACR_NAME --platform linux/amd64 \
+  --image gateway:latest \
+  --file src/Gateway/Dockerfile src/Gateway/
+
+# ── Alternativa local (lenta en Apple Silicon por emulación amd64) ──────────
+
+# Login al ACR — Docker Desktop:
+# az acr login --name $ACR_NAME
+
+# Login al ACR — Podman (sin daemon Docker):
+# ACR_TOKEN=$(az acr login --name $ACR_NAME --expose-token --output tsv --query accessToken)
+# echo $ACR_TOKEN | podman login ${ACR_NAME}.azurecr.io \
+#   --username 00000000-0000-0000-0000-000000000000 \
+#   --password-stdin
+
+# Build y push local — Docker Desktop:
+# docker build --platform linux/amd64 -t ${ACR_NAME}.azurecr.io/product-service:latest \
+#   -f src/Services/ProductService/Dockerfile src/Services/
+# docker build --platform linux/amd64 -t ${ACR_NAME}.azurecr.io/order-service:latest \
+#   -f src/Services/OrderService/Dockerfile src/Services/
+# docker build --platform linux/amd64 -t ${ACR_NAME}.azurecr.io/gateway:latest \
+#   -f src/Gateway/Dockerfile src/Gateway/
+# docker push ${ACR_NAME}.azurecr.io/product-service:latest
+# docker push ${ACR_NAME}.azurecr.io/order-service:latest
+# docker push ${ACR_NAME}.azurecr.io/gateway:latest
+
+# Build y push local — Podman:
+# podman build --platform linux/amd64 -t ${ACR_NAME}.azurecr.io/product-service:latest \
+#   -f src/Services/ProductService/Dockerfile src/Services/
+# podman build --platform linux/amd64 -t ${ACR_NAME}.azurecr.io/order-service:latest \
+#   -f src/Services/OrderService/Dockerfile src/Services/
+# podman build --platform linux/amd64 -t ${ACR_NAME}.azurecr.io/gateway:latest \
+#   -f src/Gateway/Dockerfile src/Gateway/
+# podman push ${ACR_NAME}.azurecr.io/product-service:latest
+# podman push ${ACR_NAME}.azurecr.io/order-service:latest
+# podman push ${ACR_NAME}.azurecr.io/gateway:latest
 
 # 5. Crear cluster AKS (vinculado al ACR)
 az aks create \
-  --resource-group rg-microservices \
-  --name aks-microservices \
+  --resource-group $RG \
+  --name $AKS_NAME \
   --node-count 2 \
   --enable-managed-identity \
-  --attach-acr myacrregistry \
+  --attach-acr $ACR_NAME \
   --generate-ssh-keys
 
 # 6. Obtener credenciales de kubectl
-az aks get-credentials --resource-group rg-microservices --name aks-microservices
+az aks get-credentials --resource-group $RG --name $AKS_NAME
 
 # 7. Verificar conexión
 kubectl get nodes
 
 # 8. Desplegar (con imágenes del ACR)
-./infrastructure/kubernetes/deploy.sh myacrregistry
+./infrastructure/kubernetes/deploy.sh $ACR_NAME
 
 # 9. Obtener IP externa del Gateway (puede tardar 1-2 minutos)
 kubectl get svc gateway -n microservices -w
@@ -340,7 +377,7 @@ curl http://20.xxx.xxx.xxx/api/v1/Products | jq
 curl http://20.xxx.xxx.xxx/health | jq
 ```
 
-> **Nota:** El nombre del ACR (`myacrregistry`) debe ser único globalmente en Azure. Cámbialo por uno propio si ya está tomado (ej: `myname2025acr`). El flag `--attach-acr` en el paso 5 permite que AKS haga pull de imágenes desde el ACR sin configuración adicional.
+> **Nota:** `$RANDOM` genera un número entre 0–32767, garantizando nombres únicos en la sesión. Guarda la salida del paso 0 por si cierras la terminal. El flag `--attach-acr` permite que AKS haga pull de imágenes desde el ACR sin configuración adicional.
 
 ### Opción B — Local con Docker Desktop (Kubernetes integrado)
 

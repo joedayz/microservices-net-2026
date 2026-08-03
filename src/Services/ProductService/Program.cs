@@ -154,8 +154,8 @@ builder.Services.AddHostedService<ProductEventConsumer>();
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenLocalhost(5001, o => o.Protocols = HttpProtocols.Http1);       // REST
-    options.ListenLocalhost(5002, o => o.Protocols = HttpProtocols.Http2);       // gRPC
+    options.ListenAnyIP(5001, o => o.Protocols = HttpProtocols.Http1);       // REST
+    options.ListenAnyIP(5002, o => o.Protocols = HttpProtocols.Http2);       // gRPC
 });
 
 
