@@ -6,14 +6,19 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
-// Health Checks (Módulo 11) — verifica ProductService y OrderService
+// Health Checks (Módulo 11) — URLs configurables (localhost en local, DNS de K8s en AKS)
+var productHealthUrl = builder.Configuration["HealthChecks:ProductServiceUrl"]
+    ?? "http://localhost:5001/health";
+var orderHealthUrl = builder.Configuration["HealthChecks:OrderServiceUrl"]
+    ?? "http://localhost:5003/health";
+
 builder.Services.AddHealthChecks()
     .AddUrlGroup(
-        new Uri("http://localhost:5001/health"),
+        new Uri(productHealthUrl),
         name: "product-service",
         tags: new[] { "dependency" })
     .AddUrlGroup(
-        new Uri("http://localhost:5003/health"),
+        new Uri(orderHealthUrl),
         name: "order-service",
         tags: new[] { "dependency" });
 

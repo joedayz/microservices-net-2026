@@ -7,6 +7,8 @@ data:
   ASPNETCORE_ENVIRONMENT: "Production"
   ReverseProxy__Clusters__productservice__Destinations__destination1__Address: "http://product-service:5001"
   ReverseProxy__Clusters__orderservice__Destinations__destination1__Address: "http://order-service:5003"
+  HealthChecks__ProductServiceUrl: "http://product-service:5001/health"
+  HealthChecks__OrderServiceUrl: "http://order-service:5003/health"
 ---
 apiVersion: apps/v1
 kind: Deployment

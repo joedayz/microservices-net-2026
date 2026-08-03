@@ -37,6 +37,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: order-service-config
+          env:
+            - name: ConnectionStrings__DefaultConnection
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: CONNECTION_STRING
           readinessProbe:
             httpGet:
               path: /health
