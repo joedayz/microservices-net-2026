@@ -5,9 +5,8 @@ RUN dotnet publish Gateway.csproj -c Release -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
-RUN adduser --disabled-password --gecos "" appuser
 COPY --from=build /app/publish .
 EXPOSE 5010
 ENV ASPNETCORE_ENVIRONMENT=Production
-USER appuser
+USER app
 ENTRYPOINT ["dotnet", "Gateway.dll"]
